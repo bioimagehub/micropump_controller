@@ -10,3 +10,6 @@ dependencies:
     - python-dotenv
     - pyyaml
     - usbx
+    - pyusb
+  # Optional Windows-specific packages (only install if on Windows)
+  # - pywin32  # For Windows registry access
