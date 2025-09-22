@@ -82,10 +82,10 @@ try:
 except ImportError:  # pragma: no cover - optional dependency
     load_dotenv = None  # type: ignore
 
-# Local imports (package-relative). Classes actually defined in pump/valve modules.
-from device_control.pump import BartelsPumpController
-from device_control.valve import ValveController
-from device_control.resolve_ports import get_port_by_id
+# Local imports - simplified structure with single files per device
+from src.pump import PumpController
+from src.valve import ValveController
+from src.resolve_ports import get_port_by_id
 
 
 class MockPump:
@@ -94,26 +94,42 @@ class MockPump:
         self.name = name
         self.running = False
 
-    def bartels_set_waveform(self, wf):
+    def set_waveform(self, wf):
         print(f"[DRY-RUN][PUMP] set waveform={wf}")
 
-    def bartels_set_voltage(self, v):
+    def set_voltage(self, v):
         print(f"[DRY-RUN][PUMP] set voltage(Vpp)={v}")
 
-    def bartels_set_freq(self, f):
+    def set_frequency(self, f):
         print(f"[DRY-RUN][PUMP] set freq={f}")
 
-    def bartels_start(self):
+    def start(self):
         self.running = True
         print("[DRY-RUN][PUMP] START")
 
-    def bartels_stop(self):
+    def stop(self):
         if self.running:
             print("[DRY-RUN][PUMP] STOP")
         self.running = False
 
     def close(self):
         print("[DRY-RUN][PUMP] CLOSE")
+
+    # Legacy method names for compatibility
+    def bartels_set_waveform(self, wf):
+        self.set_waveform(wf)
+
+    def bartels_set_voltage(self, v):
+        self.set_voltage(v)
+
+    def bartels_set_freq(self, f):
+        self.set_frequency(f)
+
+    def bartels_start(self):
+        self.start()
+
+    def bartels_stop(self):
+        self.stop()
 
 
 class MockValve:
@@ -459,12 +475,12 @@ def main(argv: list[str] | None = None) -> int:
                 f"(env={env_ports.get('pump_from_env')}, detected={env_ports.get('pump_detected')})"
             )
             try:
-                pump = BartelsPumpController(pump_cfg)
+                pump = PumpController(port=pump_cfg["pump_port"], baudrate=pump_cfg.get("baudrate", 9600))
             except Exception as e:  # pragma: no cover
                 print(f"Failed to initialize pump: {e}")
                 return 1
             # Fail-fast if underlying serial handle missing
-            if getattr(pump, 'pump', None) is None:
+            if getattr(pump, 'ser', None) is None:
                 print(
                     "ERROR: Pump serial connection not established. "
                     "Check wiring, drivers, or override with PUMP_PORT in .env."
