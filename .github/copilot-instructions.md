@@ -7,8 +7,8 @@ This is a Windows-first hardware control system for Bartels micropumps and Ardui
 
 ### Device Controller Pattern
 Controllers use a **try-initialize-fallback** pattern with automatic port detection:
-- `Pump_win` (Windows native) and `Pump_wsl` (WSL-based) share identical interfaces
-- `ValveController` uses direct Arduino serial communication
+- `Pump_win` (Windows native) and `Pump_wsl` (WSL-based) share identical interfaces  
+- `ValveController` (`src/valve.py`) uses direct Arduino serial communication
 - All controllers implement: `initialize()`, `close()`, error handling, and parameter validation
 
 **Example controller structure:**
@@ -31,9 +31,9 @@ The system uses a **layered port detection** approach in `src/resolve_ports.py`:
 
 ### WSL Integration Pattern
 WSL support enables cross-platform deployment without VM overhead:
-- `pump_wsl.py` executes Python serial commands in WSL via subprocess
+- `src/pump_wsl.py` executes Python serial commands in WSL via subprocess
 - Admin elevation handled via `via_wsl/run_as_admin.bat` + Python scripts
-- USB device attachment automated through `usbipd-win` integration
+- USB device attachment automated through `usbipd-win` integration via `via_wsl/attach_micropump.py`
 - Same pump interface as Windows version for drop-in replacement
 
 ## Development Workflows
@@ -73,6 +73,22 @@ python src/audio/monitor.py "python cli.py config_examples/pump_on_10s.yaml"
 # Test device discovery
 python src/audio/discovery.py
 ```
+
+### WSL Setup Workflow
+For cross-platform development, use the automated WSL setup:
+```bash
+# Attach USB device to WSL with admin elevation
+via_wsl/run_as_admin.bat attach_micropump.py --distro Ubuntu
+
+# Test WSL pump controller
+python -c "from src.pump_wsl import Pump_wsl; p = Pump_wsl(); p.initialize()"
+```
+
+### Important WSL Patterns
+- **Admin elevation:** WSL USB attachment requires administrator privileges; `via_wsl/run_as_admin.bat` handles UAC prompts automatically
+- **FTDI driver setup:** `attach_micropump.py` includes interactive FTDI driver installation with single sudo prompt
+- **Device reconnection:** Auto-detach/reattach cycle in `attach_micropump.py` forces driver recognition in WSL
+- **Subprocess communication:** WSL controllers execute Python serial commands via `subprocess.run()` with WSL distribution targeting
 
 ## Critical Implementation Details
 

@@ -6,6 +6,7 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional, List
+from dotenv import load_dotenv
 
 
 class Pump_wsl:
@@ -18,7 +19,57 @@ class Pump_wsl:
         self.last_error = ""
         self.is_initialized = False
         self._available_ports: List[str] = []
+        
+        # Load VID/PID from .env file for consistent device identification
+        self.vid: Optional[int] = None
+        self.pid: Optional[int] = None
+        self._load_device_ids_from_env()
        
+    def _load_device_ids_from_env(self) -> None:
+        """Load pump VID/PID from .env file for device identification."""
+        try:
+            # Find project root (where .env should be located)
+            project_root = Path(__file__).parent.parent
+            env_file = project_root / ".env"
+            
+            if env_file.exists():
+                load_dotenv(env_file)
+                self.vid = int(os.getenv('PUMP_VID', '0'))
+                self.pid = int(os.getenv('PUMP_PID', '0'))
+                
+                if self.vid > 0 and self.pid > 0:
+                    logging.info(f"WSL pump loaded VID/PID from .env: {self.vid:04X}:{self.pid:04X}")
+                else:
+                    logging.warning("Invalid or missing PUMP_VID/PUMP_PID in .env file")
+            else:
+                logging.warning("No .env file found, VID/PID resolution disabled for WSL pump")
+                
+        except Exception as e:
+            logging.warning(f"WSL pump failed to load VID/PID from .env: {e}")
+            self.vid = None
+            self.pid = None
+        try:
+            # Find project root (where .env should be located)
+            project_root = Path(__file__).parent.parent
+            env_file = project_root / ".env"
+            
+            if env_file.exists():
+                load_dotenv(env_file)
+                self.vid = int(os.getenv('PUMP_VID', '0'))
+                self.pid = int(os.getenv('PUMP_PID', '0'))
+                
+                if self.vid > 0 and self.pid > 0:
+                    logging.info(f"WSL pump loaded VID/PID from .env: {self.vid:04X}:{self.pid:04X}")
+                else:
+                    logging.warning("Invalid or missing PUMP_VID/PUMP_PID in .env file")
+            else:
+                logging.warning("No .env file found, VID/PID resolution disabled for WSL pump")
+                
+        except Exception as e:
+            logging.warning(f"WSL pump failed to load VID/PID from .env: {e}")
+            self.vid = None
+            self.pid = None
+    
     def initialize(self) -> bool:
         """Initialize pump via WSL with comprehensive setup and validation."""
         try:
@@ -78,11 +129,38 @@ class Pump_wsl:
                 print(f"✅ Using WSL distribution '{self.distro}' from .env file")
                 return True
             else:
+                # Try to map the configured name to a real installed name (e.g., Ubuntu -> Ubuntu-22.04)
+                resolved = self._resolve_installed_distro_name(self.distro)
+                if resolved:
+                    print(f"🔁 Mapping configured distro '{self.distro}' → installed '{resolved}'")
+                    self.distro = resolved
+                    # Persist the exact name to .env to avoid future prompts
+                    self._save_distro_to_env(self.distro)
+                    return True
                 print(f"❌ WSL distribution '{self.distro}' from .env file is not installed")
                 return self._handle_missing_distro()
         else:
             # No distro in .env file, help user choose one
             return self._handle_missing_distro()
+
+    def _resolve_installed_distro_name(self, configured: str) -> Optional[str]:
+        """Resolve a configured distro name to an installed one (exact or prefix match)."""
+        try:
+            available = self._get_available_distros()
+            if not available:
+                return None
+            cfg = configured.strip().lower()
+            # Exact, case-insensitive
+            for d in available:
+                if d.strip().lower() == cfg:
+                    return d
+            # Prefix match (e.g., Ubuntu vs Ubuntu-22.04)
+            for d in available:
+                if d.strip().lower().startswith(cfg):
+                    return d
+            return None
+        except Exception:
+            return None
     
     def _handle_missing_distro(self) -> bool:
         """Handle case where WSL distro is missing or not configured."""
@@ -93,27 +171,38 @@ class Pump_wsl:
             for i, distro in enumerate(available_distros, 1):
                 print(f"   {i}. {distro}")
             
-            print("\n📋 Options:")
-            print("   • Choose one of the above distributions")
-            print("   • Install a new distribution from Microsoft Store")
-            print("\n💡 Recommended distributions:")
-            print("   - Debian (lightweight)")
-            print("   - Ubuntu 24.04 LTS (popular)")
-            print("   - Ubuntu 22.04 LTS (stable)")
+            print("\n� Please select a WSL distribution:")
+            print("   Enter the number (1, 2, etc.) of your preferred distribution")
+            print("   Or press Enter to auto-select Ubuntu if available")
             
-            # For now, auto-select the first available or suggest Debian
-            if "Debian" in available_distros:
-                self.distro = "Debian"
-                print(f"🔧 Auto-selecting: {self.distro}")
-            elif available_distros:
+            try:
+                # Prompt for user input
+                choice = input("\nYour choice: ").strip()
+                
+                if choice == "":
+                    # Auto-select Ubuntu if available, otherwise first available
+                    if "Ubuntu" in available_distros:
+                        self.distro = "Ubuntu"
+                        print(f"🔧 Auto-selected: {self.distro}")
+                    else:
+                        self.distro = available_distros[0]
+                        print(f"🔧 Auto-selected: {self.distro}")
+                else:
+                    # User made a choice
+                    choice_num = int(choice)
+                    if 1 <= choice_num <= len(available_distros):
+                        self.distro = available_distros[choice_num - 1]
+                        print(f"✅ Selected: {self.distro}")
+                    else:
+                        print(f"❌ Invalid choice. Auto-selecting first available: {available_distros[0]}")
+                        self.distro = available_distros[0]
+                        
+            except (ValueError, KeyboardInterrupt):
+                print(f"🔧 Using default: {available_distros[0]}")
                 self.distro = available_distros[0]
-                print(f"🔧 Auto-selecting: {self.distro}")
-            else:
-                print("❌ No WSL distributions found")
-                return False
             
-            # Save to .env file
-            self._save_distro_to_env(self.distro)
+            # Save to .env file and create complete config
+            self._create_complete_env_file(self.distro)
             return True
         else:
             print("❌ No WSL distributions installed")
@@ -159,12 +248,57 @@ class Pump_wsl:
             ], capture_output=True, text=True, check=False, timeout=5)
             
             if result.returncode == 0:
-                distros = [line.strip().replace('*', '') for line in result.stdout.strip().split('\n') if line.strip()]
-                return [d for d in distros if d]  # Filter out empty strings
+                # Clean up the output - remove null characters and extra whitespace
+                output = result.stdout.replace('\x00', '').strip()
+                distros = [line.strip().replace('*', '') for line in output.split('\n') if line.strip()]
+                return [d for d in distros if d and not d.isspace()]  # Filter out empty strings and whitespace
             return []
             
         except Exception:
             return []
+    
+    def _create_complete_env_file(self, distro: str) -> bool:
+        """Create a complete .env file with VID/PID and WSL distribution."""
+        try:
+            project_root = Path(__file__).parent.parent
+            env_file = project_root / ".env"
+            
+            # Default VID/PID for Bartels micropump (FTDI-based)
+            default_vid = 1027  # 0x0403 in decimal
+            default_pid = 46272  # 0xB4C0 in decimal
+            arduino_vid = 9025  # 0x2341 in decimal
+            arduino_pid = 67    # 0x0043 in decimal
+            
+            env_content = f"""# .env file for micropump_controller project
+# Device IDs for serial port resolution
+PUMP_VID={default_vid}
+PUMP_PID={default_pid}
+ARDUINO_VID={arduino_vid}
+ARDUINO_PID={arduino_pid}
+
+# WSL Configuration (automatically managed by pump_wsl.py)
+# WSL_DISTRO=Debian  # This will be set automatically when WSL distribution is successfully installed
+WSL_DISTRO={distro}
+"""
+            
+            # Write the complete .env file
+            with open(env_file, 'w') as f:
+                f.write(env_content)
+            
+            print(f"✅ Created complete .env file with:")
+            print(f"   - PUMP_VID={default_vid} (0x{default_vid:04X})")
+            print(f"   - PUMP_PID={default_pid} (0x{default_pid:04X})")
+            print(f"   - WSL_DISTRO={distro}")
+            
+            # Update our own VID/PID since we just created the file
+            self.vid = default_vid
+            self.pid = default_pid
+            
+            return True
+            
+        except Exception as e:
+            print(f"⚠️  Failed to create .env file: {e}")
+            return False
     
     def _save_distro_to_env(self, distro: str) -> bool:
         """Save WSL distribution name to .env file."""
@@ -239,9 +373,16 @@ class Pump_wsl:
                 self.last_error = "WSL not available or not working"
                 return False
             
-            available_distros = [line.strip().replace('*', '') for line in result.stdout.strip().split('\n') if line.strip()]
-            
-            if self.distro not in available_distros:
+            # Sanitize and normalize distro names
+            raw = (result.stdout or "").replace('\x00', '').strip()
+            available_distros = [line.strip().replace('*', '') for line in raw.split('\n') if line.strip()]
+            norm_available = [d.strip().lower() for d in available_distros]
+            target = self.distro.strip().lower()
+
+            # Accept exact match or prefix match (Ubuntu vs Ubuntu-22.04)
+            found = target in norm_available or any(a.startswith(target) for a in norm_available)
+
+            if not found:
                 self.last_error = f"WSL distribution '{self.distro}' not found. Available: {available_distros}"
                 return False
             
@@ -255,13 +396,22 @@ class Pump_wsl:
             return False
     
     def _find_wsl_pump_port(self) -> Optional[str]:
-        """Find available serial ports in WSL."""
+        """Find available serial ports in WSL using VID/PID detection when possible."""
         if self.distro is None:
             self.last_error = "No WSL distribution configured"
             return None
             
         try:
-            # Look for serial ports in WSL
+            # Strategy 1: If we have VID/PID, try to find specific device
+            if self.vid is not None and self.pid is not None:
+                port = self._find_wsl_port_by_vid_pid()
+                if port:
+                    print(f"✅ Found WSL pump using VID/PID {self.vid:04X}:{self.pid:04X}: {port}")
+                    return port
+                else:
+                    print(f"⚠️  WSL VID/PID lookup failed for {self.vid:04X}:{self.pid:04X}")
+            
+            # Strategy 2: Fall back to listing all available serial ports
             port_cmd = "ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo 'no_ports'"
             
             result = subprocess.run([
@@ -270,15 +420,58 @@ class Pump_wsl:
             
             if result.returncode == 0 and "no_ports" not in result.stdout:
                 ports = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
-                self._available_ports = ports
                 if ports:
-                    logging.info(f"Found WSL serial ports: {ports}")
+                    self._available_ports = ports
+                    print(f"✅ Found WSL ports (fallback): {ports[0]}")
                     return ports[0]  # Return first available port
             
             return None
             
         except Exception as e:
             self.last_error = f"Error finding WSL ports: {e}"
+            return None
+    
+    def _find_wsl_port_by_vid_pid(self) -> Optional[str]:
+        """Find WSL serial port using VID/PID detection via lsusb and device mapping."""
+        if self.vid is None or self.pid is None or self.distro is None:
+            return None
+            
+        try:
+            # Check if device with our VID/PID is attached to WSL
+            vid_hex = f"{self.vid:04x}"
+            pid_hex = f"{self.pid:04x}"
+            
+            # Use lsusb to find the device
+            lsusb_cmd = f"lsusb | grep '{vid_hex}:{pid_hex}' || echo 'not_found'"
+            
+            result = subprocess.run([
+                "wsl", "-d", self.distro, "-e", "bash", "-c", lsusb_cmd
+            ], capture_output=True, text=True, check=False, timeout=10)
+            
+            if result.returncode == 0 and "not_found" not in result.stdout:
+                # Device found, now try to map to serial port
+                # FTDI devices typically show up as ttyUSB*, check which one matches
+                port_check_cmd = '''
+for port in /dev/ttyUSB* /dev/ttyACM*; do
+    if [ -c "$port" ]; then
+        echo "$port"
+        break
+    fi
+done 2>/dev/null || echo "no_port_found"'''
+                
+                port_result = subprocess.run([
+                    "wsl", "-d", self.distro, "-e", "bash", "-c", port_check_cmd
+                ], capture_output=True, text=True, check=False, timeout=10)
+                
+                if port_result.returncode == 0 and "no_port_found" not in port_result.stdout:
+                    port = port_result.stdout.strip().replace('\x00', '')  # Remove null characters
+                    if port and port.startswith('/dev/'):
+                        return port
+            
+            return None
+            
+        except Exception as e:
+            logging.warning(f"WSL VID/PID port detection failed: {e}")
             return None
     
     def _auto_fix_usb_attachment(self) -> bool:
@@ -302,11 +495,41 @@ class Pump_wsl:
                 return False
             
             print("🔒 Running USB attachment as admin (you may see a UAC prompt)...")
+            print("   Note: If FTDI support needs installing in WSL, you may be prompted for your sudo password once.")
             
             # Run attach_micropump.py via the admin batch file with current distro
-            result = subprocess.run([
-                str(admin_batch), "attach_micropump.py", "--distro", self.distro
-            ], cwd=admin_batch.parent, check=False, timeout=120)  # 2 minute timeout
+            # Run in non-interactive mode to avoid prompts during automated init
+            env = os.environ.copy()
+            env["PUMP_NON_INTERACTIVE"] = "1"
+            # Optional: pass sudo password for non-interactive FTDI setup
+            sudo_pass = os.getenv("PUMP_WSL_SUDO_PASS")
+            if sudo_pass:
+                env["PUMP_WSL_SUDO_PASS"] = str(sudo_pass)
+            # Build command with VID:PID and optional auto FTDI install
+            if self.vid and self.pid:
+                vidpid = f"{self.vid:04x}:{self.pid:04x}"
+            else:
+                vidpid = "0403:b4c0"  # default FTDI Micropump VID:PID
+
+            cmd = [
+                str(admin_batch),
+                "attach_micropump.py",
+                "--distro", self.distro,
+                "--vidpid", vidpid,
+            ]
+
+            # Auto-enable FTDI install unless explicitly disabled
+            auto_ftdi_env = (os.getenv("PUMP_WSL_FTDI_AUTO", "1") or "1").strip().lower()
+            if auto_ftdi_env in ("1", "true", "yes", "on"):  # default on
+                cmd.append("--auto-ftdi")
+
+            result = subprocess.run(
+                cmd,
+                cwd=admin_batch.parent,
+                env=env,
+                check=False,
+                timeout=180,
+            )  # allow 3 minutes
             
             if result.returncode == 0:
                 print("✅ USB attachment completed successfully")
@@ -330,30 +553,40 @@ class Pump_wsl:
             return False
             
         try:
-            # Simple test command to see if we can communicate with pump
-            test_script = f'''
-python3 -c "
-import serial, time
-try:
-    ser = serial.Serial('{self.port}', {self.baudrate}, timeout=2, xonxoff=True)
-    ser.write(b'F100\\r')
-    ser.flush()
-    time.sleep(0.2)
-    ser.close()
-    print('success')
-except Exception as e:
-    print(f'error: {{e}}')
-"
-'''
-            
-            result = subprocess.run([
-                "wsl", "-d", self.distro, "-e", "bash", "-c", test_script
-            ], capture_output=True, text=True, check=False, timeout=15)
-            
-            return result.returncode == 0 and "success" in result.stdout
+            # Use direct python invocation to avoid bash quoting issues and stabilize the line
+            code = (
+                "import serial, time, sys\n"
+                f"port='{self.port}'\n"
+                f"baud={self.baudrate}\n"
+                "try:\n"
+                "    ser = serial.Serial(port, baud, timeout=2, xonxoff=True)\n"
+                "    ser.reset_input_buffer(); ser.reset_output_buffer()\n"
+                "    try:\n"
+                "        ser.setDTR(False); time.sleep(0.05); ser.setDTR(True)\n"
+                "    except Exception:\n"
+                "        pass\n"
+                "    time.sleep(0.1)\n"
+                "    ser.write(b'F100\\r'); ser.flush(); time.sleep(0.25)\n"
+                "    ser.close(); print('success')\n"
+                "except Exception as e:\n"
+                "    print('error:', e); sys.exit(1)\n"
+            )
+
+            result = subprocess.run(
+                ["wsl", "-d", self.distro, "-e", "python3", "-c", code],
+                capture_output=True, text=True, check=False, timeout=20
+            )
+
+            ok = result.returncode == 0 and "success" in (result.stdout or "")
+            if not ok:
+                self.last_error = (
+                    f"WSL communication test failed: rc={result.returncode}, "
+                    f"stdout={result.stdout!r}, stderr={result.stderr!r}"
+                )
+            return ok
             
         except Exception as e:
-            self.last_error = f"WSL communication test failed: {e}"
+            self.last_error = f"WSL communication test exception: {e}"
             return False
     
     def _run_wsl_command(self, python_code: str) -> bool:
@@ -361,32 +594,39 @@ except Exception as e:
         if self.distro is None or self.port is None:
             self.last_error = "WSL distribution or port not configured"
             return False
-            
+
         try:
-            script = f'''
-python3 -c "
-import serial, time, sys
-try:
-    ser = serial.Serial('{self.port}', {self.baudrate}, timeout=2, xonxoff=True)
-    {python_code}
-    ser.close()
-    print('success')
-except Exception as e:
-    print(f'error: {{e}}')
-    sys.exit(1)
-"
-'''
-            
-            result = subprocess.run([
-                "wsl", "-d", self.distro, "-e", "bash", "-c", script
-            ], capture_output=True, text=True, check=False, timeout=15)
-            
-            if result.returncode == 0 and "success" in result.stdout:
+            code = (
+                "import serial, time, sys\n"
+                f"port='{self.port}'\n"
+                f"baud={self.baudrate}\n"
+                "try:\n"
+                "    ser = serial.Serial(port, baud, timeout=2, xonxoff=True)\n"
+                "    ser.reset_input_buffer(); ser.reset_output_buffer()\n"
+                "    try:\n"
+                "        ser.setDTR(False); time.sleep(0.05); ser.setDTR(True)\n"
+                "    except Exception:\n"
+                "        pass\n"
+                "    time.sleep(0.1)\n"
+                f"    {python_code}\n"
+                "    ser.close(); print('success')\n"
+                "except Exception as e:\n"
+                "    print('error:', e); sys.exit(1)\n"
+            )
+
+            result = subprocess.run(
+                ["wsl", "-d", self.distro, "-e", "python3", "-c", code],
+                capture_output=True, text=True, check=False, timeout=25
+            )
+
+            if result.returncode == 0 and "success" in (result.stdout or ""):
                 return True
             else:
-                self.last_error = f"WSL command failed: {result.stdout}"
+                self.last_error = (
+                    f"WSL command failed: rc={result.returncode}, stdout={result.stdout!r}, stderr={result.stderr!r}"
+                )
                 return False
-                
+
         except subprocess.TimeoutExpired:
             self.last_error = "WSL command timed out"
             return False

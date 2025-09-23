@@ -5,14 +5,15 @@ import sys
 from pathlib import Path
 
 # Add src directory to path
-sys.path.append(str(Path(__file__).parent.parent / "src"))
+src_path = Path(__file__).parent.parent / "src"
+sys.path.insert(0, str(src_path))
 
 def test_pump_win():
     """Test Windows pump class."""
     print("=== Testing Pump_win ===")
     try:
-        from pump_win import Pump_win
-        pump = Pump_win()
+        import pump_win
+        pump = pump_win.Pump_win()
         
         result = pump.initialize()
         print(f"Initialize result: {result}")
@@ -34,8 +35,8 @@ def test_pump_wsl():
     """Test WSL pump class."""
     print("\n=== Testing Pump_wsl ===")
     try:
-        from pump_wsl import Pump_wsl
-        pump = Pump_wsl()
+        import pump_wsl
+        pump = pump_wsl.Pump_wsl()
         
         result = pump.initialize()
         print(f"Initialize result: {result}")

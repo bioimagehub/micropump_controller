@@ -3,8 +3,16 @@
 import time
 import serial
 import logging
+import os
+from pathlib import Path
 from typing import Optional
-from resolve_ports import list_all_ports, find_pump_port_by_description, find_pump_port_by_vid_pid, get_port_by_id
+from dotenv import load_dotenv
+
+try:
+    from .resolve_ports import list_all_ports, find_pump_port_by_description, find_pump_port_by_vid_pid, get_port_by_id
+except ImportError:
+    # Fallback for when imported from different directory
+    from resolve_ports import list_all_ports, find_pump_port_by_description, find_pump_port_by_vid_pid, get_port_by_id
 
 
 class Pump_win:
@@ -16,6 +24,80 @@ class Pump_win:
         self.ser = None
         self.last_error = ""
         self.is_initialized = False
+        
+        # Load VID/PID from .env file for consistent device identification
+        # Load VID/PID from .env file for consistent device identification
+        self.vid: Optional[int] = None
+        self.pid: Optional[int] = None
+        self._load_device_ids_from_env()
+    
+    def _load_device_ids_from_env(self) -> None:
+        """Load pump VID/PID from .env file for device identification."""
+        try:
+            # Find project root (where .env should be located)
+            project_root = Path(__file__).parent.parent
+            env_file = project_root / ".env"
+            
+            if env_file.exists():
+                load_dotenv(env_file)
+                self.vid = int(os.getenv('PUMP_VID', '0'))
+                self.pid = int(os.getenv('PUMP_PID', '0'))
+                
+                if self.vid > 0 and self.pid > 0:
+                    logging.info(f"Loaded pump VID/PID from .env: {self.vid:04X}:{self.pid:04X}")
+                else:
+                    logging.warning("Invalid or missing PUMP_VID/PUMP_PID in .env file")
+                    self._create_default_env_file()
+            else:
+                logging.warning("No .env file found, creating default .env file")
+                self._create_default_env_file()
+                
+        except Exception as e:
+            logging.warning(f"Failed to load VID/PID from .env: {e}")
+            self.vid = None
+            self.pid = None
+    
+    def _create_default_env_file(self) -> bool:
+        """Create a default .env file with standard VID/PID values."""
+        try:
+            project_root = Path(__file__).parent.parent
+            env_file = project_root / ".env"
+            
+            # Default VID/PID for Bartels micropump (FTDI-based)
+            default_vid = 1027  # 0x0403 in decimal
+            default_pid = 46272  # 0xB4C0 in decimal
+            arduino_vid = 9025  # 0x2341 in decimal
+            arduino_pid = 67    # 0x0043 in decimal
+            
+            env_content = f"""# .env file for micropump_controller project
+# Device IDs for serial port resolution
+PUMP_VID={default_vid}
+PUMP_PID={default_pid}
+ARDUINO_VID={arduino_vid}
+ARDUINO_PID={arduino_pid}
+
+# WSL Configuration (automatically managed by pump_wsl.py)
+# WSL_DISTRO=Debian  # This will be set automatically when WSL distribution is successfully installed
+WSL_DISTRO=Ubuntu
+"""
+            
+            # Write the default .env file
+            with open(env_file, 'w') as f:
+                f.write(env_content)
+            
+            print(f"✅ Created default .env file with:")
+            print(f"   - PUMP_VID={default_vid} (0x{default_vid:04X})")
+            print(f"   - PUMP_PID={default_pid} (0x{default_pid:04X})")
+            
+            # Update our own VID/PID since we just created the file
+            self.vid = default_vid
+            self.pid = default_pid
+            
+            return True
+            
+        except Exception as e:
+            print(f"⚠️  Failed to create default .env file: {e}")
+            return False
     
     def initialize(self) -> bool:
         """Initialize pump with automatic COM port detection if needed."""
@@ -56,22 +138,31 @@ class Pump_win:
             return False
     
     def _find_pump_port(self) -> Optional[str]:
-        """Find a suitable COM port for the pump using resolve_ports functions."""
+        """Find a suitable COM port for the pump using layered detection strategy."""
         # Get all available ports quickly
         all_ports = list_all_ports()
         if not all_ports:
             logging.info("No COM ports found")
             return None
         
-        # Strategy 1: Try to find using .env file VID/PID (most accurate)
+        # Strategy 1: Use stored VID/PID if available (most accurate)
+        if self.vid is not None and self.pid is not None:
+            try:
+                port = find_pump_port_by_vid_pid(self.vid, self.pid)
+                print(f"✅ Found pump using stored VID/PID {self.vid:04X}:{self.pid:04X}: {port}")
+                return port
+            except Exception:
+                print(f"⚠️  Stored VID/PID lookup failed: No pump device found with VID={self.vid:04X} and PID={self.pid:04X}")
+        
+        # Strategy 2: Try get_port_by_id as fallback (uses .env via resolve_ports)
         try:
             port = get_port_by_id('pump')
-            print(f"✅ Found pump using .env VID/PID: {port}")
+            print(f"✅ Found pump using resolve_ports .env lookup: {port}")
             return port
         except Exception:
-            print(f"⚠️  .env pump lookup failed: No pump device found with VID=1027 and PID=46272.")
+            print(f"⚠️  resolve_ports .env lookup failed")
         
-        # Strategy 2: Try to find by description keywords
+        # Strategy 3: Try to find by description keywords
         pump_keywords = ["micropump", "bartels", "ftdi", "ft232", "usb serial", "usb micropump control"]
         for keyword in pump_keywords:
             try:
@@ -81,7 +172,7 @@ class Pump_win:
             except Exception:
                 continue  # Try next keyword
         
-        # Strategy 3: Try known FTDI VID/PID combinations
+        # Strategy 4: Try known FTDI VID/PID combinations
         ftdi_combinations = [
             (0x0403, 0xB4C0),  # Your specific pump from .env (1027, 46272)
             (0x0403, 0x6001),  # FTDI FT232R
@@ -111,6 +202,8 @@ class Pump_win:
     
     def _test_communication(self) -> bool:
         """Test if pump responds to commands - with very short timeout."""
+        if self.ser is None:
+            return False
         try:
             # Send a simple command and see if pump accepts it
             self.ser.write(b"F100\r")

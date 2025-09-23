@@ -1,5 +1,10 @@
 
-"""Command-line interface for running pump/valve sequences from a YAML file.
+"""
+# THIS HAS NOT BEEN UPDATED SINCE REFACTORING TO WINDOES VS WSL - IS OUTDATED
+# AND MAY REQUIRE ADJUSTMENTS TO WORK PROPERLY.
+
+
+Command-line interface for running pump/valve sequences from a YAML file.
 
 Usage examples (from project root):
     python -m device_control.cli config_examples/continuous_switching.yaml

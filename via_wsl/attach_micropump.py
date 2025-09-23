@@ -1,4 +1,5 @@
 import argparse
+import os
 import ctypes
 import os
 import re
@@ -132,6 +133,13 @@ def ensure_wsl_running(distro: str):
             return False
     return True
 
+def restart_wsl_distro(distro: str):
+    print(f"Restarting WSL distro '{distro}'...")
+    run(["wsl", "-t", distro], check=False)
+    time.sleep(1)
+    # Start again
+    ensure_wsl_running(distro)
+
 def bind_and_attach(usbipd_exe: Path, busid: str):
     # Check current status first
     listing = usbipd_list(usbipd_exe)
@@ -218,6 +226,10 @@ dmesg | tail -n 10 | grep -E "(usb|tty|ftdi)" || echo "No recent USB/FTDI messag
     
     if device_count == 0:
         print("\n⚠️  No serial devices found. FTDI drivers may need to be installed.")
+        # Allow non-interactive behavior if PUMP_NON_INTERACTIVE=1
+        if os.getenv("PUMP_NON_INTERACTIVE") == "1":
+            print("Skipping interactive FTDI setup because PUMP_NON_INTERACTIVE=1")
+            return False
         setup_ftdi = input("Would you like to set up FTDI drivers interactively? (y/N): ")
         if setup_ftdi.lower() in ['y', 'yes']:
             return setup_ftdi_drivers_interactive(distro)
@@ -236,18 +248,20 @@ def setup_ftdi_drivers_interactive(distro: str):
     
     # Create a comprehensive setup script
     setup_script = f'''
+set -e
+export DEBIAN_FRONTEND=noninteractive
 echo "=== Starting FTDI driver setup ==="
 echo "Updating package list..."
-apt update
+apt-get update -yq
 
 echo "Installing FTDI drivers and development tools..."
-apt install -y libftdi1-2 libftdi1-dev python3-serial
+apt-get install -yq libftdi1-2 libftdi1-dev python3-serial usbutils
 
 echo "Adding user to dialout group for serial port access..."
-usermod -a -G dialout $USER
+usermod -a -G dialout $USER || true
 
 echo "Creating udev rule for FTDI micropump device..."
-echo 'SUBSYSTEM=="usb", ATTRS{{idVendor}}=="0403", ATTRS{{idProduct}}=="b4c0", MODE="0666"' > /etc/udev/rules.d/99-ftdi-micropump.rules
+echo 'SUBSYSTEM=="usb", ATTRS{{idVendor}}=="0403", ATTRS{{idProduct}}=="b4c0", MODE="0666"' > /etc/udev/rules.d/99-ftdi-micropump.rules || true
 
 echo "Reloading udev rules..."
 udevadm control --reload-rules 2>/dev/null || echo "udev reload failed (this is normal in some WSL configurations)"
@@ -262,15 +276,33 @@ echo "0403 b4c0" > /sys/bus/usb-serial/drivers/ftdi_sio/new_id 2>/dev/null || ec
 
 echo "=== FTDI driver setup complete ==="
 echo "Note: You may need to log out and back in for group changes to take effect."
+
+# If devices already exist, ensure world RW permissions for immediate access
+for p in /dev/ttyUSB* /dev/ttyACM*; do
+    if [ -c "$p" ]; then
+        chmod a+rw "$p" || true
+    fi
+done
 '''
     
     try:
         # Run the setup script with sudo in WSL
-        print("Running FTDI driver installation (you'll be prompted for password)...")
-        result = subprocess.run(
-            ["wsl", "-d", distro, "-e", "sudo", "bash", "-c", setup_script],
-            check=False
-        )
+        print("Running FTDI driver installation (sudo may prompt for password)...")
+        sudo_pass = os.environ.get("PUMP_WSL_SUDO_PASS", "")
+        if sudo_pass:
+            # Provide password non-interactively via stdin
+            result = subprocess.run(
+                ["wsl", "-d", distro, "-e", "sudo", "-S", "bash", "-c", setup_script],
+                input=sudo_pass + "\n",
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        else:
+            result = subprocess.run(
+                ["wsl", "-d", distro, "-e", "sudo", "bash", "-c", setup_script],
+                check=False
+            )
         
         if result.returncode == 0:
             print("✅ FTDI driver installation completed successfully!")
@@ -328,6 +360,7 @@ def main():
     parser.add_argument("--name-hint", default="Micropump", help="Fallback device name hint")
     parser.add_argument("--msi", default=str(DEFAULT_MSI_IN_REPO), help="Path to a vendored usbipd-win MSI (optional)")
     parser.add_argument("--wsl-script", help="Path to Python script inside WSL to run after attach (optional)")
+    parser.add_argument("--auto-ftdi", action="store_true", help="Attempt FTDI driver setup automatically (will prompt for sudo password in WSL)")
     parser.add_argument("--", dest="script_args", nargs=argparse.REMAINDER, help="Args after -- are passed to the WSL script")
     args = parser.parse_args()
 
@@ -347,6 +380,17 @@ def main():
     
     # Check device status in WSL
     has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+
+    # If no serial devices yet and auto-ftdi requested, try FTDI setup once
+    if not has_serial_devices and args.auto_ftdi:
+        print("\nAuto-installing FTDI support (non-interactive prompt flow)...")
+        if setup_ftdi_drivers_interactive(args.distro):
+            # Re-verify after FTDI install
+            has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+            if not has_serial_devices:
+                # Try restarting the distro to apply group changes and module loads
+                restart_wsl_distro(args.distro)
+                has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
     
     if not has_serial_devices:
         print("\nChecking if device reconnection is needed...")
@@ -365,6 +409,17 @@ def main():
                 
                 # Verify again after reconnection
                 has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+                # If still none and auto-ftdi requested, try FTDI install as last resort
+                if not has_serial_devices and args.auto_ftdi:
+                    print("\nAuto-installing FTDI support after reconnection...")
+                    if setup_ftdi_drivers_interactive(args.distro):
+                        has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+                        if not has_serial_devices:
+                            restart_wsl_distro(args.distro)
+                            # Reattach after restart to ensure kernel binds
+                            run([str(usbipd_exe), "attach", "--wsl", "--busid", busid], check=False)
+                            time.sleep(2)
+                            has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
                 if has_serial_devices:
                     print("✅ Serial devices now available!")
                 else:
