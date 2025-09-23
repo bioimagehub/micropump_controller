@@ -35,7 +35,7 @@ def test_pump_wsl():
     print("\n=== Testing Pump_wsl ===")
     try:
         from pump_wsl import Pump_wsl
-        pump = Pump_wsl(distro="Alpine")
+        pump = Pump_wsl()
         
         result = pump.initialize()
         print(f"Initialize result: {result}")

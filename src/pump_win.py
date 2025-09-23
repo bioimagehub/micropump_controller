@@ -72,7 +72,7 @@ class Pump_win:
             print(f"⚠️  .env pump lookup failed: No pump device found with VID=1027 and PID=46272.")
         
         # Strategy 2: Try to find by description keywords
-        pump_keywords = ["bartels", "ftdi", "ft232", "usb serial"]
+        pump_keywords = ["micropump", "bartels", "ftdi", "ft232", "usb serial", "usb micropump control"]
         for keyword in pump_keywords:
             try:
                 port = find_pump_port_by_description(keyword)
