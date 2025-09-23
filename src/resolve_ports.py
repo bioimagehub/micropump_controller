@@ -17,7 +17,11 @@ def get_port_by_id(device: str) -> str:
     Raises:
         Exception: If no matching device is found or device type is invalid.
     """
-    load_dotenv(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), '.env'))
+    # Look for .env file in project root (parent of src directory)
+    project_root = os.path.dirname(os.path.dirname(__file__))
+    env_path = os.path.join(project_root, '.env')
+    load_dotenv(env_path)
+    
     if device.lower() == 'pump':
         vid = int(os.getenv('PUMP_VID', '0'))
         pid = int(os.getenv('PUMP_PID', '0'))

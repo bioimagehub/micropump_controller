@@ -19,6 +19,35 @@ def is_admin():
     except Exception:
         return False
 
+def elevate_to_admin():
+    """Re-launch the script with administrator privileges"""
+    if is_admin():
+        return  # Already admin
+    
+    print("Administrator privileges required. Attempting to elevate...")
+    
+    # Get the current script path and arguments
+    script_path = sys.argv[0]
+    args = sys.argv[1:]
+    
+    # Prepare the command for elevation
+    # Use ShellExecute with "runas" verb to trigger UAC prompt
+    try:
+        import ctypes
+        ctypes.windll.shell32.ShellExecuteW(
+            None,  # parent window handle
+            "runas",  # operation - triggers UAC
+            sys.executable,  # Python executable
+            f'"{script_path}" {" ".join(args)}',  # script and args
+            None,  # working directory
+            1  # show window normally
+        )
+        # Exit the current non-elevated process
+        sys.exit(0)
+    except Exception as e:
+        print(f"Failed to elevate to administrator: {e}")
+        sys.exit("Please manually run this script as Administrator.")
+
 def run(cmd, check=True):
     print(">>>", " ".join(cmd))
     return subprocess.run(cmd, check=check, text=True, capture_output=True)
@@ -37,7 +66,7 @@ def ensure_usbipd_available(msi_path: Path | None):
         return exe
 
     if not is_admin():
-        sys.exit("usbipd not found and install required. Please re-run this script as Administrator.")
+        elevate_to_admin()  # This will re-launch with admin privileges
 
     # prefer repo-pinned MSI if present
     if msi_path and msi_path.exists():
