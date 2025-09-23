@@ -1,0 +1,40 @@
+# Ignore the delete folder and all its contents
+delete/
+
+# Python cache files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.env
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Logs
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+
+# Driver signing artifacts (scoped to Bartels XU7 driver folder)
+/hardware/drivers/Bartels_controller_XU7_USB_Driver_2.08.30/*.cat.*.bak
+/hardware/drivers/Bartels_controller_XU7_USB_Driver_2.08.30/*.pfx
+/hardware/drivers/Bartels_controller_XU7_USB_Driver_2.08.30/*.log
+*.pyc

@@ -28,6 +28,7 @@ except ImportError:
 
 from pump import PumpController
 from pump_nodriver import PumpController as PumpControllerNoDriver
+from pump_libusb import PumpController as PumpControllerLibUSB
 from valve import ValveController  
 from microscope import MicroscopeController
 from stage3d import Stage3DController
@@ -44,6 +45,7 @@ class HardwareTestSuite:
         self.results = {
             'pump_driver': {'found': False, 'controller': None, 'test_passed': False},
             'pump_nodriver': {'found': False, 'controller': None, 'test_passed': False},
+            'pump_libusb': {'found': False, 'controller': None, 'test_passed': False},
             'valve': {'found': False, 'controller': None, 'test_passed': False},
             'microscope': {'found': False, 'controller': None, 'test_passed': False},
             'stage3d': {'found': False, 'controller': None, 'test_passed': False}
@@ -60,6 +62,7 @@ class HardwareTestSuite:
             
         self._discover_pump_driver()
         self._discover_pump_nodriver()
+        self._discover_pump_libusb()
         self._discover_valve() 
         self._discover_microscope()
         self._discover_stage3d()
@@ -111,6 +114,27 @@ class HardwareTestSuite:
                 
         except Exception as e:
             print(f"❌ Pump (driver-free) not found: {e}")
+            
+    def _discover_pump_libusb(self):
+        """Discover and initialize pump using libusb-win32 controller."""
+        print("\n💧 PUMP (Bartels Micropump - LIBUSB)")
+        print("-" * 40)
+        
+        try:
+            # Try libusb approach (works with libusb-win32 driver from Zadig)
+            pump = PumpControllerLibUSB()
+            if pump.device is not None:
+                self.results['pump_libusb']['found'] = True
+                self.results['pump_libusb']['controller'] = pump
+                print(f"✅ Pump (libusb) initialized successfully")
+                # Close immediately after verification
+                pump.close()
+                self.results['pump_libusb']['controller'] = None
+            else:
+                print(f"❌ Pump found but failed to initialize (libusb)")
+                
+        except Exception as e:
+            print(f"❌ Pump (libusb) not found: {e}")
     
     def _discover_pump(self):
         """Legacy method - replaced by _discover_pump_driver and _discover_pump_nodriver."""
@@ -196,6 +220,7 @@ class HardwareTestSuite:
         
         self._test_pump_driver()
         self._test_pump_nodriver()
+        self._test_pump_libusb()
         self._test_valve()
         self._test_microscope() 
         self._test_stage3d()
@@ -279,6 +304,45 @@ class HardwareTestSuite:
             
         except Exception as e:
             print(f"❌ Pump (driver-free) test failed: {e}")
+            
+    def _test_pump_libusb(self):
+        """Test pump functionality using libusb controller."""
+        print("\n💧 Testing Pump (LIBUSB)...")
+        
+        if not self.results['pump_libusb']['found']:
+            print("❌ Pump (libusb) not available for testing")
+            return
+            
+        try:
+            # Reinitialize for testing
+            pump = PumpControllerLibUSB()
+            
+            if pump.device is None:
+                print("❌ Failed to reinitialize libusb pump for testing")
+                return
+            
+            print("  Setting frequency to 100 Hz...")
+            pump.set_frequency(100)
+            time.sleep(0.5)
+            
+            print("  Setting voltage to 50V...")
+            pump.set_voltage(50)
+            time.sleep(0.5)
+            
+            print("  Turning pump ON for 2 seconds...")
+            pump.start()
+            time.sleep(2)
+            
+            print("  Turning pump OFF...")
+            pump.stop()
+            
+            pump.close()  # Clean up
+            
+            self.results['pump_libusb']['test_passed'] = True
+            print("✅ Pump (libusb) test completed successfully")
+            
+        except Exception as e:
+            print(f"❌ Pump (libusb) test failed: {e}")
     
     def _test_pump(self):
         """Legacy method - replaced by _test_pump_driver and _test_pump_nodriver."""
@@ -400,7 +464,7 @@ class HardwareTestSuite:
         total_found = sum(1 for r in self.results.values() if r['found'])
         total_passed = sum(1 for r in self.results.values() if r['test_passed'])
         
-        print(f"Components discovered: {total_found}/5")
+        print(f"Components discovered: {total_found}/6")
         print(f"Tests passed: {total_passed}/{total_found}")
         print()
         
@@ -414,7 +478,7 @@ def main():
     """Main test execution."""
     print("🔬 MICROPUMP CONTROLLER - HARDWARE TEST SUITE")
     print("=" * 60)
-    print("Testing components: Pump (driver & driver-free), Valve, Microscope, 3D Stage")
+    print("Testing components: Pump (driver, driver-free & libusb), Valve, Microscope, 3D Stage")
     print()
     
     # List available ports for reference
