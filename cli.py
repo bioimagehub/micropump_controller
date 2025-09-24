@@ -264,7 +264,7 @@ def run_sequence(
             # Modified behavior: mimic test_pump_cycle.py where we simply start the pump
             # without re-applying waveform/voltage/frequency each time. We keep the
             # profile name for logging only (initial settings were applied at controller init).
-            print(f"[ACTION] Pump START (profile '{profile_name}' – using initial configured settings)")
+            print(f"[ACTION] Pump START (profile '{profile_name}' - using initial configured settings)")
             try:
                 pump.bartels_start()
             except Exception as e:
@@ -512,7 +512,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         run_sequence(config, pump, valve, pump_profiles, dry_run=dry_run)
     except KeyboardInterrupt:
-        print("\n[INTERRUPT] Caught Ctrl+C – shutting down devices...")
+        print("\n[INTERRUPT] Caught Ctrl+C - shutting down devices...")
         try:
             if pump:
                 pump.bartels_stop()

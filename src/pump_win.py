@@ -80,7 +80,7 @@ WSL_DISTRO=Ubuntu
             with open(env_file, 'w') as f:
                 f.write(env_content)
             
-            print(f"✅ Created default .env file with:")
+            print(f"OK Created default .env file with:")
             print(f"   - PUMP_VID={default_vid} (0x{default_vid:04X})")
             print(f"   - PUMP_PID={default_pid} (0x{default_pid:04X})")
             
@@ -91,7 +91,7 @@ WSL_DISTRO=Ubuntu
             return True
             
         except Exception as e:
-            print(f"⚠️  Failed to create default .env file: {e}")
+            print(f"WARNING  Failed to create default .env file: {e}")
             return False
     
     def _list_all_ports(self) -> List[Tuple[str, str, Optional[str], Optional[str]]]:
@@ -272,25 +272,25 @@ WSL_DISTRO=Ubuntu
         if self.vid is not None and self.pid is not None:
             try:
                 port = self._find_pump_port_by_vid_pid(self.vid, self.pid)
-                print(f"✅ Found pump using stored VID/PID {self.vid:04X}:{self.pid:04X}: {port}")
+                print(f"OK Found pump using stored VID/PID {self.vid:04X}:{self.pid:04X}: {port}")
                 return port
             except Exception:
-                print(f"⚠️  Stored VID/PID lookup failed: No pump device found with VID={self.vid:04X} and PID={self.pid:04X}")
+                print(f"WARNING  Stored VID/PID lookup failed: No pump device found with VID={self.vid:04X} and PID={self.pid:04X}")
         
         # Strategy 2: Try get_port_by_id as fallback (uses current .env)
         try:
             port = self._get_port_by_id('pump')
-            print(f"✅ Found pump using .env lookup: {port}")
+            print(f"OK Found pump using .env lookup: {port}")
             return port
         except Exception:
-            print(f"⚠️  .env VID/PID lookup failed")
+            print(f"WARNING  .env VID/PID lookup failed")
         
         # Strategy 3: Try to find by description keywords
         pump_keywords = ["micropump", "bartels", "ftdi", "ft232", "usb serial", "usb micropump control"]
         for keyword in pump_keywords:
             try:
                 port = self._find_pump_port_by_description(keyword)
-                print(f"✅ Found pump by description '{keyword}': {port}")
+                print(f"OK Found pump by description '{keyword}': {port}")
                 return port
             except Exception:
                 continue  # Try next keyword
@@ -306,12 +306,12 @@ WSL_DISTRO=Ubuntu
         for vid, pid in ftdi_combinations:
             try:
                 port = self._find_pump_port_by_vid_pid(vid, pid)
-                print(f"✅ Found pump by VID/PID {vid:04X}:{pid:04X}: {port}")
+                print(f"OK Found pump by VID/PID {vid:04X}:{pid:04X}: {port}")
                 return port
             except Exception:
                 continue  # Try next combination
         
-        print("❌ No suitable pump ports found")
+        print("FAIL No suitable pump ports found")
         return None
     
     def _test_port_quick(self, port: str) -> bool:

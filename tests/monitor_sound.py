@@ -60,10 +60,10 @@ class AudioCommandMonitor:
                     device=self.device_id
                 )
                 sd.wait()
-                print(f"🎤 Using specified device ID: {self.device_id}")
+                print(f"MIC Using specified device ID: {self.device_id}")
                 return True
             except Exception as e:
-                print(f"❌ Specified device {self.device_id} failed: {e}")
+                print(f"FAIL Specified device {self.device_id} failed: {e}")
                 return False
         
         try:
@@ -76,10 +76,10 @@ class AudioCommandMonitor:
                     input_devices.append((i, device))
             
             if not input_devices:
-                print("❌ No input devices found")
+                print("FAIL No input devices found")
                 return False
             
-            print(f"🔍 Testing {len(input_devices)} input devices...")
+            print(f"SEARCH Testing {len(input_devices)} input devices...")
             
             # Test each device to find one that works
             for device_id, device_info in input_devices:
@@ -96,28 +96,28 @@ class AudioCommandMonitor:
                         device=device_id
                     )
                     sd.wait()
-                    print(" ✅")
+                    print(" OK")
                     
                     self.device_id = device_id
-                    print(f"🎤 Using: {device_name} (ID: {device_id})")
+                    print(f"MIC Using: {device_name} (ID: {device_id})")
                     return True
                     
                 except Exception as e:
-                    print(f" ❌ {str(e)[:30]}")
+                    print(f" FAIL {str(e)[:30]}")
                     continue
             
-            print("❌ No working audio devices found")
+            print("FAIL No working audio devices found")
             return False
             
         except Exception as e:
-            print(f"❌ Error finding audio device: {e}")
+            print(f"FAIL Error finding audio device: {e}")
             return False
     
     def record_audio(self, duration: float, label: str = "") -> Optional[np.ndarray]:
         """Record audio for specified duration."""
         try:
             if label:
-                print(f"🎙️  Recording {label.lower()} for {duration:.1f}s...")
+                print(f"MIC  Recording {label.lower()} for {duration:.1f}s...")
             
             audio_data = sd.rec(
                 int(duration * self.sample_rate),
@@ -131,7 +131,7 @@ class AudioCommandMonitor:
             return audio_data.flatten()
             
         except Exception as e:
-            print(f"❌ Recording failed: {e}")
+            print(f"FAIL Recording failed: {e}")
             return None
     
     def analyze_audio(self, audio_data: np.ndarray, label: str = "") -> Optional[Dict[str, float]]:
@@ -159,7 +159,7 @@ class AudioCommandMonitor:
         }
         
         if label:
-            print(f"📊 {label} Analysis:")
+            print(f"STATS {label} Analysis:")
             print(f"   Duration: {analysis['duration']:.2f}s")
             print(f"   RMS Level: {analysis['rms']:.6f}")
             print(f"   Peak Level: {analysis['peak']:.6f}")
@@ -169,8 +169,8 @@ class AudioCommandMonitor:
     
     def record_baseline(self) -> bool:
         """Record baseline audio."""
-        print(f"\n📴 Recording baseline audio...")
-        print(f"🤫 Please keep environment quiet for {self.baseline_duration} seconds")
+        print(f"\nOFF Recording baseline audio...")
+        print(f"SHH Please keep environment quiet for {self.baseline_duration} seconds")
         
         # Countdown
         for i in range(3, 0, -1):
@@ -183,12 +183,12 @@ class AudioCommandMonitor:
             self.baseline_analysis = self.analyze_audio(self.baseline_audio, "BASELINE")
             return True
         else:
-            print("❌ Failed to record baseline")
+            print("FAIL Failed to record baseline")
             return False
     
     def execute_command_with_audio(self, command: Union[str, list], shell: bool = True) -> tuple:
         """Execute command while recording audio."""
-        print(f"\n🚀 Executing command while recording audio...")
+        print(f"\nROCKET Executing command while recording audio...")
         print(f"Command: {command}")
         
         start_time = time.time()
@@ -245,18 +245,18 @@ class AudioCommandMonitor:
             
             result = CommandResult(return_code, stdout, stderr)
             
-            print(f"⏱️  Command completed in {execution_time:.2f}s")
-            print(f"⏱️  Audio recorded for {recording_duration:.2f}s")
+            print(f"STOPWATCH  Command completed in {execution_time:.2f}s")
+            print(f"STOPWATCH  Audio recorded for {recording_duration:.2f}s")
             
             return result, execution_time
             
         except Exception as e:
-            print(f"❌ Error during command execution: {e}")
+            print(f"FAIL Error during command execution: {e}")
             return None, 0
     
     def execute_function_with_audio(self, func: Callable, *args, **kwargs) -> tuple:
         """Execute a Python function while recording audio."""
-        print(f"\n🚀 Executing function while recording audio...")
+        print(f"\nROCKET Executing function while recording audio...")
         print(f"Function: {func.__name__}")
         
         start_time = time.time()
@@ -332,19 +332,19 @@ class AudioCommandMonitor:
             
             func_result = FunctionResult(result, function_success)
             
-            print(f"⏱️  Function completed in {execution_time:.2f}s")
-            print(f"⏱️  Audio recorded for {recording_duration:.2f}s")
+            print(f"STOPWATCH  Function completed in {execution_time:.2f}s")
+            print(f"STOPWATCH  Audio recorded for {recording_duration:.2f}s")
             
             return func_result, execution_time
             
         except Exception as e:
-            print(f"❌ Error during function execution: {e}")
+            print(f"FAIL Error during function execution: {e}")
             return None, 0
     
     def compare_audio(self) -> Optional[Dict[str, Any]]:
         """Compare baseline and command audio."""
         if self.baseline_analysis is None or self.command_analysis is None:
-            print("❌ Cannot compare - missing audio analysis")
+            print("FAIL Cannot compare - missing audio analysis")
             return None
         
         baseline_rms = self.baseline_analysis['rms']
@@ -369,7 +369,7 @@ class AudioCommandMonitor:
             'command': self.command_analysis
         }
         
-        print(f"\n🔍 AUDIO COMPARISON:")
+        print(f"\nSEARCH AUDIO COMPARISON:")
         print(f"   Baseline RMS:  {baseline_rms:.6f}")
         print(f"   Command RMS:   {command_rms:.6f}")
         print(f"   RMS Change:    {rms_change_pct:+.1f}% ({rms_ratio:.2f}x)")
@@ -387,27 +387,27 @@ class AudioCommandMonitor:
         
         rms_ratio = comparison['rms_ratio']
         
-        print(f"\n🎯 INTERPRETATION:")
+        print(f"\nTARGET INTERPRETATION:")
         
         if rms_ratio > 2.0:
             interpretation = "SIGNIFICANT_INCREASE"
-            print(f"🔊 SIGNIFICANT AUDIO INCREASE detected!")
+            print(f"SPEAKER SIGNIFICANT AUDIO INCREASE detected!")
             print(f"   Sound levels more than doubled during execution.")
         elif rms_ratio > 1.5:
             interpretation = "MODERATE_INCREASE"
-            print(f"📈 MODERATE AUDIO INCREASE detected")
+            print(f"UP MODERATE AUDIO INCREASE detected")
             print(f"   Command caused noticeable sound level changes.")
         elif rms_ratio > 1.2:
             interpretation = "SLIGHT_INCREASE"
-            print(f"📊 SLIGHT AUDIO INCREASE detected")
+            print(f"STATS SLIGHT AUDIO INCREASE detected")
             print(f"   Small but measurable sound level increase.")
         elif rms_ratio > 0.8:
             interpretation = "NO_SIGNIFICANT_CHANGE"
-            print(f"➖ NO SIGNIFICANT CHANGE in audio levels")
+            print(f"- NO SIGNIFICANT CHANGE in audio levels")
             print(f"   Execution was relatively quiet.")
         else:
             interpretation = "DECREASE"
-            print(f"📉 AUDIO DECREASE detected")
+            print(f"DOWN AUDIO DECREASE detected")
             print(f"   Sound levels decreased during execution.")
         
         return interpretation
@@ -522,7 +522,7 @@ Examples:
     
     args = parser.parse_args()
     
-    print("🎤 AUDIO COMMAND MONITOR")
+    print("MIC AUDIO COMMAND MONITOR")
     print("=" * 50)
     print(f"Command: {args.command}")
     print(f"Baseline duration: {args.baseline}s")
@@ -536,22 +536,22 @@ Examples:
                              device_id=args.device, shell=not args.no_shell)
         
         if result["success"]:
-            print("\n✅ Audio monitoring completed successfully!")
-            print(f"📊 Result: {result['audio_interpretation']}")
+            print("\nOK Audio monitoring completed successfully!")
+            print(f"STATS Result: {result['audio_interpretation']}")
             if result.get('comparison'):
                 comp = result['comparison']
-                print(f"📈 RMS change: {comp['rms_change_pct']:+.1f}%")
-                print(f"📈 Peak change: {comp['peak_change_pct']:+.1f}%")
+                print(f"UP RMS change: {comp['rms_change_pct']:+.1f}%")
+                print(f"UP Peak change: {comp['peak_change_pct']:+.1f}%")
             sys.exit(0)
         else:
-            print(f"\n❌ Audio monitoring failed: {result.get('error', 'Unknown error')}")
+            print(f"\nFAIL Audio monitoring failed: {result.get('error', 'Unknown error')}")
             sys.exit(1)
             
     except KeyboardInterrupt:
-        print("\n❌ Interrupted by user")
+        print("\nFAIL Interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nFAIL Error: {e}")
         import traceback
         traceback.print_exc()
         sys.exit(1)

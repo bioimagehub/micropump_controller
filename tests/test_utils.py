@@ -10,7 +10,7 @@ import time
 
 def quick_audio_test():
     """Quick test to verify audio recording works."""
-    print("🎤 QUICK AUDIO TEST")
+    print("MIC QUICK AUDIO TEST")
     print("=" * 40)
     
     try:
@@ -39,7 +39,7 @@ def quick_audio_test():
         sd.wait()
         
         if audio_data is None or len(audio_data) == 0:
-            print("❌ No audio data recorded")
+            print("FAIL No audio data recorded")
             return False
         
         # Analyze the recorded audio
@@ -48,32 +48,32 @@ def quick_audio_test():
         rms = np.sqrt(np.mean(audio_flat**2))
         peak = np.max(np.abs(audio_flat))
         
-        print(f"✅ Recording successful!")
+        print(f"OK Recording successful!")
         print(f"   Duration: {duration}s")
         print(f"   Samples: {len(audio_flat)}")
         print(f"   RMS Level: {rms:.6f}")
         print(f"   Peak Level: {peak:.6f}")
         
         if rms > 0.001:
-            print("🔊 Active audio detected")
+            print("SPEAKER Active audio detected")
         else:
-            print("🤫 Very quiet environment")
+            print("SHH Very quiet environment")
         
         return True
         
     except Exception as e:
-        print(f"❌ Audio test failed: {e}")
+        print(f"FAIL Audio test failed: {e}")
         return False
 
 def test_device_by_id(device_id):
     """Test a specific audio device by ID."""
-    print(f"🎤 Testing device ID {device_id}")
+    print(f"MIC Testing device ID {device_id}")
     
     try:
         # Get device info
         devices = sd.query_devices()
         if device_id >= len(devices):
-            print(f"❌ Device ID {device_id} not found")
+            print(f"FAIL Device ID {device_id} not found")
             return False
         
         device_info = devices[device_id]
@@ -93,25 +93,25 @@ def test_device_by_id(device_id):
         sd.wait()
         
         if audio_data is None or len(audio_data) == 0:
-            print(f"❌ No audio data from device {device_id}")
+            print(f"FAIL No audio data from device {device_id}")
             return False
         
         audio_flat = audio_data.flatten().astype(np.float32) / 32768.0
         rms = np.sqrt(np.mean(audio_flat**2))
         peak = np.max(np.abs(audio_flat))
         
-        print(f"✅ Device {device_id} works!")
+        print(f"OK Device {device_id} works!")
         print(f"   RMS: {rms:.6f}, Peak: {peak:.6f}")
         
         return True
         
     except Exception as e:
-        print(f"❌ Device {device_id} test failed: {e}")
+        print(f"FAIL Device {device_id} test failed: {e}")
         return False
 
 def list_audio_devices():
     """List all available audio devices."""
-    print("🔍 AUDIO DEVICES")
+    print("SEARCH AUDIO DEVICES")
     print("=" * 40)
     
     try:
@@ -123,7 +123,7 @@ def list_audio_devices():
                 input_devices.append((i, device))
         
         if not input_devices:
-            print("❌ No input devices found")
+            print("FAIL No input devices found")
             return []
         
         print(f"Found {len(input_devices)} input devices:")
@@ -136,7 +136,7 @@ def list_audio_devices():
         return input_devices
         
     except Exception as e:
-        print(f"❌ Error listing devices: {e}")
+        print(f"FAIL Error listing devices: {e}")
         return []
 
 def main():
@@ -168,13 +168,13 @@ def main():
             if not quick_audio_test():
                 sys.exit(1)
         
-        print("\\n✅ Audio testing completed!")
+        print("\\nOK Audio testing completed!")
         
     except KeyboardInterrupt:
-        print("\\n❌ Interrupted by user")
+        print("\\nFAIL Interrupted by user")
         sys.exit(1)
     except Exception as e:
-        print(f"\\n❌ Error: {e}")
+        print(f"\\nFAIL Error: {e}")
         sys.exit(1)
 
 if __name__ == "__main__":

@@ -16,6 +16,117 @@ from pathlib import Path
 GITHUB_API_URL = "https://api.github.com/repos/dorssel/usbipd-win/releases/latest"
 DEFAULT_MSI_IN_REPO = Path("tools/usbipd-win_x64.msi")  # commit an MSI here if you prefer pinning
 
+ENV_PATH = Path(".env")
+OPTIONAL_ENV_DEFAULTS = {
+    "ARDUINO_VID": "9025", # 0x2341 in decimal
+    "ARDUINO_PID": "67",   # 0x0043 in decimal
+}
+
+
+def _ensure_env_file(required_values, optional_defaults=None):
+    """Update or create .env with required values and optional defaults."""
+    optional_defaults = optional_defaults or {}
+    if ENV_PATH.exists():
+        try:
+            with open(ENV_PATH, "r", encoding="utf-8") as handle:
+                lines = handle.read().splitlines()
+        except UnicodeDecodeError:
+            with open(ENV_PATH, "r") as handle:
+                lines = handle.read().splitlines()
+    else:
+        lines = ["# .env file for micropump_controller project"]
+
+    existing_keys = set()
+    updated_lines = []
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            updated_lines.append(line)
+            continue
+
+        key, _, _ = line.partition("=")
+        key = key.strip()
+        existing_keys.add(key)
+
+        if key in required_values:
+            updated_lines.append(f"{key}={required_values[key]}")
+        else:
+            updated_lines.append(line)
+
+    for key, value in required_values.items():
+        if key not in existing_keys:
+            if updated_lines and updated_lines[-1] != "":
+                updated_lines.append("")
+            updated_lines.append(f"{key}={value}")
+            existing_keys.add(key)
+
+    for key, value in optional_defaults.items():
+        if key not in existing_keys:
+            if updated_lines and updated_lines[-1] != "":
+                updated_lines.append("")
+            updated_lines.append(f"{key}={value}")
+            existing_keys.add(key)
+
+    with open(ENV_PATH, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(updated_lines) + "\n")
+
+def _read_env_value(key):
+    """Read a single key from the local .env file."""
+    if not ENV_PATH.exists():
+        return None
+    try:
+        with open(ENV_PATH, "r", encoding="utf-8") as handle:
+            lines = handle.readlines()
+    except UnicodeDecodeError:
+        with open(ENV_PATH, "r") as handle:
+            lines = handle.readlines()
+    prefix = f"{key}="
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if stripped.startswith(prefix):
+            return stripped.split("=", 1)[1]
+    return None
+
+def _prompt_for_wsl_distro():
+    """Prompt the user to select an installed WSL distribution."""
+    result = subprocess.run(["wsl", "-l", "-q"], capture_output=True, text=True, check=False)
+    distros = []
+    for raw_line in result.stdout.splitlines():
+        cleaned = raw_line.replace("\x00", "").strip()
+        if cleaned:
+            distros.append(cleaned)
+    if not distros:
+        sys.exit("No WSL distributions found. Install one from the Microsoft Store and try again.")
+
+    print("Available WSL distributions:")
+    for idx, name in enumerate(distros, 1):
+        print(f"  [{idx}] {name}")
+
+    prompt = f"Select WSL distro [1-{len(distros)}]: "
+    while True:
+        choice = input(prompt).strip()
+        if choice.isdigit():
+            index = int(choice)
+            if 1 <= index <= len(distros):
+                return distros[index - 1]
+        print("Invalid selection. Please try again by entering the list number.")
+
+def _vidpid_to_decimal(vidpid):
+    """Convert a VID:PID string to decimal strings expected in .env."""
+    parts = vidpid.split(":")
+    if len(parts) != 2:
+        raise ValueError(f"Invalid VID:PID format: {vidpid}")
+    vid_part, pid_part = parts
+    try:
+        vid_value = str(int(vid_part, 16))
+        pid_value = str(int(pid_part, 16))
+    except ValueError as exc:
+        raise ValueError(f"VID:PID should be hexadecimal, got {vidpid}") from exc
+    return vid_value, pid_value
+
 def is_admin():
     try:
         return ctypes.windll.shell32.IsUserAnAdmin()
@@ -93,7 +204,7 @@ def get_latest_usbipd_download_url() -> str:
         raise Exception("Could not find x64 MSI asset in release")
         
     except Exception as e:
-        print(f"⚠️  Failed to get latest release info: {e}")
+        print(f"WARNING: Failed to get latest release info: {e}")
         # Ultimate fallback to a known working version
         fallback_url = "https://github.com/dorssel/usbipd-win/releases/download/v5.2.0/usbipd-win_5.2.0_x64.msi"
         print(f"Using hardcoded fallback: {fallback_url}")
@@ -126,7 +237,7 @@ def download_with_progress(url: str, destination: Path) -> bool:
         return True
         
     except Exception as e:
-        print(f"\n❌ Download failed: {e}")
+        print(f"\nERROR Download failed: {e}")
         return False
     finally:
         # Reset timeout
@@ -163,18 +274,18 @@ def ensure_usbipd_available(msi_path: Path | None):
             if download_with_progress(download_url, installer):
                 break
         else:
-            sys.exit("❌ Failed to download usbipd-win after multiple attempts. Please check your internet connection.")
+            sys.exit("ERROR Failed to download usbipd-win after multiple attempts. Please check your internet connection.")
 
     # silent install
     print("Installing usbipd-win silently...")
     try:
         result = run(["msiexec", "/i", str(installer), "/qn", "/norestart"], check=False)
         if result.returncode != 0:
-            print(f"⚠️  MSI installation returned code {result.returncode}")
+            print(f"WARNING: MSI installation returned code {result.returncode}")
             if result.stderr:
                 print(f"Error details: {result.stderr}")
     except Exception as e:
-        print(f"❌ Installation error: {e}")
+        print(f"ERROR Installation error: {e}")
         sys.exit("usbipd installation failed.")
     
     # Give the installation a moment to complete
@@ -185,7 +296,7 @@ def ensure_usbipd_available(msi_path: Path | None):
     if not exe:
         sys.exit("usbipd installation appears to have failed (usbipd not on PATH).")
     
-    print(f"✅ usbipd installed successfully at: {exe}")
+    print(f"SUCCESS: usbipd installed successfully at: {exe}")
     return exe
 
 def usbipd_list(usbipd_exe: Path):
@@ -325,18 +436,18 @@ dmesg | tail -n 10 | grep -E "(usb|tty|ftdi)" || echo "No recent USB/FTDI messag
     device_count = int(serial_check.stdout.strip()) if serial_check.stdout.strip().isdigit() else 0
     
     if device_count == 0:
-        print("\n⚠️  No serial devices found. FTDI drivers may need to be installed.")
+        print("\nWARNING: No serial devices found. FTDI drivers may need to be installed.")
         # Allow non-interactive behavior if PUMP_NON_INTERACTIVE=1
         if os.getenv("PUMP_NON_INTERACTIVE") == "1":
             print("Skipping interactive FTDI setup because PUMP_NON_INTERACTIVE=1")
             return False
-        setup_ftdi = input("Would you like to set up FTDI drivers interactively? (y/N): ")
+        setup_ftdi = input("Would you like to set up FTDI drivers interactively< (y/N): ")
         if setup_ftdi.lower() in ['y', 'yes']:
             return setup_ftdi_drivers_interactive(distro)
         else:
             return False
     else:
-        print(f"✅ Found {device_count} serial device(s)")
+        print(f"SUCCESS: Found {device_count} serial device(s)")
         return True
 
 def setup_ftdi_drivers_interactive(distro: str):
@@ -417,10 +528,10 @@ for device in /dev/ttyUSB* /dev/ttyACM*; do
 done
 
 echo "=== FTDI driver setup complete ==="
-echo "✅ User $ACTUAL_USER added to dialout group"
-echo "✅ Udev rules installed for automatic device permissions"
-echo "✅ FTDI kernel modules loaded"
-echo "✅ No sudo will be required for future pump operations"
+echo "SUCCESS: User $ACTUAL_USER added to dialout group"
+echo "SUCCESS: Udev rules installed for automatic device permissions"
+echo "SUCCESS: FTDI kernel modules loaded"
+echo "SUCCESS: No sudo will be required for future pump operations"
 '''
     
     try:
@@ -443,7 +554,7 @@ echo "✅ No sudo will be required for future pump operations"
             )
         
         if result.returncode == 0:
-            print("✅ FTDI driver installation completed successfully!")
+            print("SUCCESS: FTDI driver installation completed successfully!")
             
             # Validate group membership and permissions 
             print("\n=== Validating Setup ===")
@@ -453,9 +564,9 @@ echo "✅ No sudo will be required for future pump operations"
             group_refresh = f"""
 # Check if user is in dialout group
 if groups {current_user} | grep -q dialout; then
-    echo "✅ User {current_user} is now in dialout group"
+    echo "SUCCESS: User {current_user} is now in dialout group"
 else
-    echo "⚠️  Group membership may need WSL restart"
+    echo "WARNING: Group membership may need WSL restart"
 fi
 
 # List current groups
@@ -464,16 +575,16 @@ groups {current_user}
 
 # Check udev rules
 if [ -f /etc/udev/rules.d/99-ftdi-micropump.rules ]; then
-    echo "✅ Udev rules installed"
+    echo "SUCCESS: Udev rules installed"
 else
-    echo "⚠️  Udev rules missing"
+    echo "WARNING: Udev rules missing"
 fi
 
 # Check modules
 if lsmod | grep -q ftdi_sio; then
-    echo "✅ FTDI kernel modules loaded"
+    echo "SUCCESS: FTDI kernel modules loaded"
 else
-    echo "ℹ️  FTDI modules will load when device is attached"
+    echo "INFO  FTDI modules will load when device is attached"
 fi
 """
             
@@ -513,29 +624,29 @@ fi
             final_count = int(final_check.stdout.strip()) if final_check.stdout.strip().isdigit() else 0
             
             if final_count > 0:
-                print(f"\n✅ Success! Found {final_count} serial device(s) after FTDI setup.")
+                print(f"\nSUCCESS: Success! Found {final_count} serial device(s) after FTDI setup.")
                 # Test permissions without sudo
                 print("\n=== Testing Permissions (No Sudo Required) ===")
                 test_result = test_serial_access_no_sudo(distro)
                 if test_result:
-                    print("🎉 Perfect! Pump can now run without sudo.")
+                    print("Congrats Perfect! Pump can now run without sudo.")
                 else:
-                    print("⚠️  May need WSL restart for group changes to take full effect.")
-                    print("💡 Try: wsl --shutdown && wsl")
+                    print("WARNING: May need WSL restart for group changes to take full effect.")
+                    print("NOTE Try: wsl --shutdown && wsl")
                 return True
             else:
-                print("\n⚠️  FTDI drivers installed but serial devices not yet available.")
+                print("\nWARNING: FTDI drivers installed but serial devices not yet available.")
                 print("This may require:")
                 print("1. Detaching and reattaching the USB device")
                 print("2. Restarting WSL: wsl --shutdown && wsl")
                 print("3. Logging out and back in to apply group changes")
                 return False
         else:
-            print(f"❌ FTDI driver installation failed with exit code: {result.returncode}")
+            print(f"ERROR FTDI driver installation failed with exit code: {result.returncode}")
             return False
             
     except Exception as e:
-        print(f"❌ Failed to install FTDI drivers: {e}")
+        print(f"ERROR Failed to install FTDI drivers: {e}")
         return False
 
 
@@ -588,16 +699,16 @@ def check_device_access(device_path):
             try:
                 with open(device_path, 'r+b', 0):
                     pass
-                return True, f"✅ {device_path}: Full access confirmed"
+                return True, f"SUCCESS: {device_path}: Full access confirmed"
             except PermissionError:
-                return False, f"❌ {device_path}: Permission denied despite file mode {mode}"
+                return False, f"ERROR {device_path}: Permission denied despite file mode {mode}"
             except Exception as e:
-                return True, f"⚠️  {device_path}: Accessible but device busy ({e})"
+                return True, f"WARNING: {device_path}: Accessible but device busy ({e})"
         else:
-            return False, f"❌ {device_path}: Insufficient permissions {mode}"
+            return False, f"ERROR {device_path}: Insufficient permissions {mode}"
             
     except Exception as e:
-        return False, f"❌ {device_path}: Error checking access - {e}"
+        return False, f"ERROR {device_path}: Error checking access - {e}"
 
 # Find and test all serial devices
 devices_tested = 0
@@ -613,20 +724,20 @@ for device_pattern in ["/dev/ttyUSB*", "/dev/ttyACM*"]:
             devices_accessible += 1
 
 if devices_tested == 0:
-    print("ℹ️  No serial devices found to test")
+    print("INFO  No serial devices found to test")
 elif devices_accessible == devices_tested:
-    print(f"🎉 SUCCESS: All {devices_accessible}/{devices_tested} serial devices accessible without sudo")
+    print(f"Congrats SUCCESS: All {devices_accessible}/{devices_tested} serial devices accessible without sudo")
 else:
-    print(f"⚠️  {devices_accessible}/{devices_tested} serial devices accessible")
+    print(f"WARNING: {devices_accessible}/{devices_tested} serial devices accessible")
 
 # Check group membership
 import subprocess
 try:
     groups_result = subprocess.run(["groups"], capture_output=True, text=True)
     if "dialout" in groups_result.stdout:
-        print("✅ User is in dialout group")
+        print("SUCCESS: User is in dialout group")
     else:
-        print("❌ User not in dialout group - may need WSL restart")
+        print("ERROR User not in dialout group - may need WSL restart")
         print(f"Current groups: {groups_result.stdout.strip()}")
 except Exception as e:
     print(f"Could not check groups: {e}")
@@ -656,14 +767,23 @@ def run_wsl_python(distro: str, wsl_script: str, args: list[str]):
 
 def main():
     parser = argparse.ArgumentParser(description="Bind+attach a USB device to WSL2 and optionally run a WSL Python script.")
-    parser.add_argument("--distro", default="Ubuntu", help="WSL distro name (default: Ubuntu)")
     parser.add_argument("--vidpid", default="0403:b4c0", help="USB VID:PID to match (default: 0403:b4c0 for FTDI Micropump)")
+    parser.add_argument("--distro", help="Target WSL distribution (overrides .env and interactive selection)")
     parser.add_argument("--name-hint", default="Micropump", help="Fallback device name hint")
     parser.add_argument("--msi", default=str(DEFAULT_MSI_IN_REPO), help="Path to a vendored usbipd-win MSI (optional)")
     parser.add_argument("--wsl-script", help="Path to Python script inside WSL to run after attach (optional)")
     parser.add_argument("--auto-ftdi", action="store_true", help="Attempt FTDI driver setup automatically (will prompt for sudo password in WSL)")
     parser.add_argument("--", dest="script_args", nargs=argparse.REMAINDER, help="Args after -- are passed to the WSL script")
     args = parser.parse_args()
+
+    try:
+        pump_vid_dec, pump_pid_dec = _vidpid_to_decimal(args.vidpid)
+    except ValueError as exc:
+        sys.exit(str(exc))
+
+    distro = args.distro or _read_env_value("WSL_DISTRO")
+    if not distro:
+        distro = _prompt_for_wsl_distro()
 
     msi_path = Path(args.msi) if args.msi else None
     usbipd_exe = ensure_usbipd_available(msi_path if msi_path and msi_path.exists() else None)
@@ -675,23 +795,34 @@ def main():
         sys.exit(f"Could not find device with VID:PID {args.vidpid} or name containing '{args.name_hint}'.")
 
     print(f"Found device at BUSID {busid}")
-    if not ensure_wsl_running(args.distro):
-        sys.exit(f"Cannot proceed - WSL distribution '{args.distro}' is not available.")
+    if not ensure_wsl_running(distro):
+        sys.exit(f"Cannot proceed - WSL distribution '{distro}' is not available.")
+
+    _ensure_env_file(
+        {
+            "WSL_DISTRO": distro,
+            "PUMP_VID": pump_vid_dec,
+            "PUMP_PID": pump_pid_dec,
+        },
+        OPTIONAL_ENV_DEFAULTS,
+    )
+    print("Saved WSL settings to .env")
+
     bind_and_attach(usbipd_exe, busid)
     
     # Check device status in WSL
-    has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+    has_serial_devices = verify_in_wsl(distro, args.vidpid)
 
     # If no serial devices yet and auto-ftdi requested, try FTDI setup once
     if not has_serial_devices and args.auto_ftdi:
         print("\nAuto-installing FTDI support (non-interactive prompt flow)...")
-        if setup_ftdi_drivers_interactive(args.distro):
+        if setup_ftdi_drivers_interactive(distro):
             # Re-verify after FTDI install
-            has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+            has_serial_devices = verify_in_wsl(distro, args.vidpid)
             if not has_serial_devices:
                 # Try restarting the distro to apply group changes and module loads
-                restart_wsl_distro(args.distro)
-                has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+                restart_wsl_distro(distro)
+                has_serial_devices = verify_in_wsl(distro, args.vidpid)
     
     if not has_serial_devices:
         print("\nChecking if device reconnection is needed...")
@@ -709,33 +840,33 @@ def main():
                 time.sleep(2)
                 
                 # Verify again after reconnection
-                has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+                has_serial_devices = verify_in_wsl(distro, args.vidpid)
                 # If still none and auto-ftdi requested, try FTDI install as last resort
                 if not has_serial_devices and args.auto_ftdi:
                     print("\nAuto-installing FTDI support after reconnection...")
-                    if setup_ftdi_drivers_interactive(args.distro):
-                        has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+                    if setup_ftdi_drivers_interactive(distro):
+                        has_serial_devices = verify_in_wsl(distro, args.vidpid)
                         if not has_serial_devices:
-                            restart_wsl_distro(args.distro)
+                            restart_wsl_distro(distro)
                             # Reattach after restart to ensure kernel binds
                             run([str(usbipd_exe), "attach", "--wsl", "--busid", busid], check=False)
                             time.sleep(2)
-                            has_serial_devices = verify_in_wsl(args.distro, args.vidpid)
+                            has_serial_devices = verify_in_wsl(distro, args.vidpid)
                 if has_serial_devices:
-                    print("✅ Serial devices now available!")
+                    print("SUCCESS: Serial devices now available!")
                 else:
-                    print("❌ Still no serial devices after reconnection")
+                    print("ERROR Still no serial devices after reconnection")
                     print("The device may need manual driver installation in WSL.")
             else:
                 print(f"Failed to reattach device: {attach_result.stderr}")
         else:
             print(f"Failed to detach device: {detach_result.stderr}")
     else:
-        print("✅ Serial devices are available in WSL!")
+        print("SUCCESS: Serial devices are available in WSL!")
 
     # Optional: run your WSL-side controller
     if args.wsl_script:
-        run_wsl_python(args.distro, args.wsl_script, args.script_args or [])
+        run_wsl_python(distro, args.wsl_script, args.script_args or [])
 
     print("All done.")
 

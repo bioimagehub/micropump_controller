@@ -323,10 +323,10 @@ def uninstall_usbipd(dry_run=False):
                 print(f"Uninstalling using product code: {product_code}")
                 result = run(["msiexec", "/x", product_code, "/qn"], check=False)
                 if result.returncode == 0:
-                    print("✅ Successfully uninstalled usbipd-win via MSI")
+                    print("OK Successfully uninstalled usbipd-win via MSI")
                     uninstall_success = True
                 else:
-                    print(f"❌ MSI uninstall failed: {result.stderr}")
+                    print(f"FAIL MSI uninstall failed: {result.stderr}")
         
         # Method 2: Try registry-based approach if wmic failed
         if not uninstall_success:
@@ -356,7 +356,7 @@ def uninstall_usbipd(dry_run=False):
                                                     product_code = match.group(1)
                                                     result = run(["msiexec", "/x", product_code, "/qn"], check=False)
                                                     if result.returncode == 0:
-                                                        print("✅ Successfully uninstalled via registry method")
+                                                        print("OK Successfully uninstalled via registry method")
                                                         uninstall_success = True
                                                         break
                                         except FileNotFoundError:
@@ -384,12 +384,12 @@ def uninstall_usbipd(dry_run=False):
                 try:
                     if location.is_dir():
                         shutil.rmtree(location)
-                        print(f"✅ Successfully removed directory {location}")
+                        print(f"OK Successfully removed directory {location}")
                     else:
                         location.unlink()
-                        print(f"✅ Successfully removed file {location}")
+                        print(f"OK Successfully removed file {location}")
                 except Exception as e:
-                    print(f"❌ Failed to remove {location}: {e}")
+                    print(f"FAIL Failed to remove {location}: {e}")
             else:
                 print(f"Not found: {location}")
         
@@ -415,7 +415,7 @@ def uninstall_usbipd(dry_run=False):
                             new_path = ';'.join(cleaned_entries)
                             winreg.SetValueEx(key, value_name, 0, winreg.REG_EXPAND_SZ, new_path)
                             removed_count = len(path_entries) - len(cleaned_entries)
-                            print(f"✅ Removed {removed_count} usbipd-related PATH entries from {root_key.name}")
+                            print(f"OK Removed {removed_count} usbipd-related PATH entries from {root_key.name}")
                         else:
                             print(f"No usbipd-related PATH entries found in {root_key.name}")
                 except Exception as e:
@@ -430,7 +430,7 @@ def uninstall_usbipd(dry_run=False):
         for msi_file in temp_dir.glob("*usbipd*.msi"):
             try:
                 msi_file.unlink()
-                print(f"✅ Removed temporary MSI: {msi_file}")
+                print(f"OK Removed temporary MSI: {msi_file}")
             except Exception as e:
                 print(f"Could not remove {msi_file}: {e}")
         
@@ -438,15 +438,15 @@ def uninstall_usbipd(dry_run=False):
         print("\n=== Verifying removal ===")
         final_exe = find_exe_on_path("usbipd")
         if final_exe:
-            print(f"⚠️  usbipd still found at: {final_exe}")
+            print(f"WARNING  usbipd still found at: {final_exe}")
             print("Manual removal may be required.")
         else:
-            print("✅ usbipd-win appears to be completely removed")
+            print("OK usbipd-win appears to be completely removed")
         
         return True
         
     except Exception as e:
-        print(f"❌ Error during usbipd-win uninstallation: {e}")
+        print(f"FAIL Error during usbipd-win uninstallation: {e}")
         return False
 
 def check_cleanup_status(distro: str):
@@ -456,29 +456,29 @@ def check_cleanup_status(distro: str):
     print("=" * 50)
     
     # Check Windows status
-    print("\n🪟 WINDOWS STATUS:")
+    print("\nTOOL WINDOWS STATUS:")
     usbipd_exe = find_exe_on_path("usbipd")
     if usbipd_exe:
-        print(f"  ⚠️  usbipd-win still installed at: {usbipd_exe}")
+        print(f"  WARNING  usbipd-win still installed at: {usbipd_exe}")
         # Show current USB device status
         try:
             result = run([str(usbipd_exe), "list"], check=False)
             if result.returncode == 0:
                 attached_count = result.stdout.count("Attached")
                 shared_count = result.stdout.count("Shared")
-                print(f"  📊 USB Devices: {attached_count} attached, {shared_count} shared")
+                print(f"  STATS USB Devices: {attached_count} attached, {shared_count} shared")
             else:
-                print("  ❌ Could not check USB device status")
+                print("  FAIL Could not check USB device status")
         except:
-            print("  ❌ Error checking USB device status")
+            print("  FAIL Error checking USB device status")
     else:
-        print("  ✅ usbipd-win: Not found (removed)")
+        print("  OK usbipd-win: Not found (removed)")
     
     # Check WSL status
-    print(f"\n🐧 WSL STATUS (Distribution: {distro}):")
+    print(f"\nPENGUIN WSL STATUS (Distribution: {distro}):")
     wsl_result = run(["wsl", "-d", distro, "-e", "true"], check=False)
     if wsl_result.returncode != 0:
-        print(f"  ❌ WSL distribution '{distro}' not accessible")
+        print(f"  FAIL WSL distribution '{distro}' not accessible")
         return
     
     # Check user groups
@@ -489,52 +489,52 @@ def check_cleanup_status(distro: str):
         if groups_check.returncode == 0:
             groups = groups_check.stdout.strip()
             if "dialout" in groups:
-                print(f"  ⚠️  User {current_user} still in dialout group")
+                print(f"  WARNING  User {current_user} still in dialout group")
             else:
-                print(f"  ✅ User {current_user} removed from dialout group")
+                print(f"  OK User {current_user} removed from dialout group")
         else:
-            print("  ❌ Could not check user groups")
+            print("  FAIL Could not check user groups")
     
     # Check FTDI modules
     modules_check = run(["wsl", "-d", distro, "-e", "bash", "-c", "lsmod | grep -E '(ftdi|usbserial)' | wc -l"], check=False)
     if modules_check.returncode == 0:
         module_count = int(modules_check.stdout.strip()) if modules_check.stdout.strip().isdigit() else 0
         if module_count > 0:
-            print(f"  ⚠️  {module_count} FTDI-related kernel modules still loaded")
+            print(f"  WARNING  {module_count} FTDI-related kernel modules still loaded")
         else:
-            print("  ✅ FTDI kernel modules: Unloaded")
+            print("  OK FTDI kernel modules: Unloaded")
     
     # Check udev rules
     udev_check = run(["wsl", "-d", distro, "-e", "bash", "-c", "ls /etc/udev/rules.d/*ftdi* /etc/udev/rules.d/*micropump* 2>/dev/null | wc -l"], check=False)
     if udev_check.returncode == 0:
         rule_count = int(udev_check.stdout.strip()) if udev_check.stdout.strip().isdigit() else 0
         if rule_count > 0:
-            print(f"  ⚠️  {rule_count} FTDI/micropump udev rules still present")
+            print(f"  WARNING  {rule_count} FTDI/micropump udev rules still present")
         else:
-            print("  ✅ Custom udev rules: Removed")
+            print("  OK Custom udev rules: Removed")
     
     # Check serial devices
     serial_check = run(["wsl", "-d", distro, "-e", "bash", "-c", "ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | wc -l"], check=False)
     if serial_check.returncode == 0:
         device_count = int(serial_check.stdout.strip()) if serial_check.stdout.strip().isdigit() else 0
         if device_count > 0:
-            print(f"  ℹ️  {device_count} serial devices still present (may be from other hardware)")
+            print(f"  INFO  {device_count} serial devices still present (may be from other hardware)")
         else:
-            print("  ✅ Serial devices: None present")
+            print("  OK Serial devices: None present")
     
     # Check Python packages
     python_check = run(["wsl", "-d", distro, "-e", "bash", "-c", "pip3 list | grep -E '(pyserial|pyusb|ftd2xx)' | wc -l"], check=False)
     if python_check.returncode == 0:
         pkg_count = int(python_check.stdout.strip()) if python_check.stdout.strip().isdigit() else 0
         if pkg_count > 0:
-            print(f"  ⚠️  {pkg_count} serial-related Python packages still installed")
+            print(f"  WARNING  {pkg_count} serial-related Python packages still installed")
         else:
-            print("  ✅ Serial Python packages: Removed")
+            print("  OK Serial Python packages: Removed")
     
-    print("\n📋 SUMMARY:")
-    print("  🔄 If any items show ⚠️, they may need manual cleanup")
-    print("  🔧 Run 'wsl --shutdown && wsl' to ensure kernel modules are unloaded")
-    print("  💻 Restart Windows to ensure all changes take effect")
+    print("\nCLIPBOARD SUMMARY:")
+    print("  REFRESH If any items show WARNING, they may need manual cleanup")
+    print("  WRENCH Run 'wsl --shutdown && wsl' to ensure kernel modules are unloaded")
+    print("  LAPTOP Restart Windows to ensure all changes take effect")
 
 
 def cleanup_windows_drivers(dry_run=False):
@@ -632,24 +632,24 @@ def main():
         print("=" * 40)
     
     if not args.force and not args.dry_run:
-        print("\n⚠️  COMPREHENSIVE CLEANUP - This will:")
+        print("\nWARNING  COMPREHENSIVE CLEANUP - This will:")
         if not args.windows_only:
-            print(f"  🐧 WSL ({args.distro}):")
-            print("     • Remove user from dialout group")
-            print("     • Unload FTDI kernel modules")
-            print("     • Remove custom udev rules")
-            print("     • Uninstall FTDI and serial packages")
-            print("     • Reset serial device permissions")
+            print(f"  PENGUIN WSL ({args.distro}):")
+            print("     - Remove user from dialout group")
+            print("     - Unload FTDI kernel modules")
+            print("     - Remove custom udev rules")
+            print("     - Uninstall FTDI and serial packages")
+            print("     - Reset serial device permissions")
         if not args.wsl_only:
-            print("  🪟 Windows:")
-            print("     • Detach all USB devices from WSL")
+            print("  TOOL Windows:")
+            print("     - Detach all USB devices from WSL")
             if not args.keep_usbipd:
-                print("     • Completely uninstall usbipd-win")
-                print("     • Remove from PATH environment variable")
-            print("     • Clean up Windows FTDI drivers")
+                print("     - Completely uninstall usbipd-win")
+                print("     - Remove from PATH environment variable")
+            print("     - Clean up Windows FTDI drivers")
         
-        print(f"\n💡 You can test this safely first with: --dry-run")
-        response = input("\n❓ Do you want to continue with the actual cleanup? (y/N): ")
+        print(f"\nNOTE You can test this safely first with: --dry-run")
+        response = input("\n? Do you want to continue with the actual cleanup? (y/N): ")
         if response.lower() not in ['y', 'yes']:
             print("Operation cancelled.")
             return
@@ -700,25 +700,25 @@ def main():
     
     print("\n" + "=" * 50)
     if args.dry_run:
-        print("✓ Dry run completed successfully!")
-        print("💡 Use without --dry-run to perform actual cleanup.")
+        print("CHECK Dry run completed successfully!")
+        print("NOTE Use without --dry-run to perform actual cleanup.")
     elif success:
-        print("🎉 Cleanup completed successfully!")
-        print("✅ All micropump components have been removed/reset.")
+        print("CELEBRATE Cleanup completed successfully!")
+        print("OK All micropump components have been removed/reset.")
     else:
-        print("⚠️  Cleanup completed with some warnings/errors.")
+        print("WARNING  Cleanup completed with some warnings/errors.")
         print("Some manual cleanup may be required - check status above.")
     
     if not args.dry_run:
-        print("\n📋 POST-CLEANUP RECOMMENDATIONS:")
-        print("  🔄 Run 'wsl --shutdown && wsl' to restart WSL completely")
-        print("  💻 Restart Windows to ensure all driver changes take effect")
+        print("\nCLIPBOARD POST-CLEANUP RECOMMENDATIONS:")
+        print("  REFRESH Run 'wsl --shutdown && wsl' to restart WSL completely")
+        print("  LAPTOP Restart Windows to ensure all driver changes take effect")
         if not args.wsl_only:
-            print("  🔍 Check Device Manager for any remaining FTDI devices")
-            print("  🛠️  Verify usbipd-win is removed from PATH (if applicable)")
-        print("  🧹 Clear any project-specific .env files if desired")
+            print("  SEARCH Check Device Manager for any remaining FTDI devices")
+            print("  TOOLS  Verify usbipd-win is removed from PATH (if applicable)")
+        print("  CLEAN Clear any project-specific .env files if desired")
         
-        print(f"\n🚀 TO RE-ENABLE MICROPUMP LATER:")
+        print(f"\nROCKET TO RE-ENABLE MICROPUMP LATER:")
         print(f"     python via_wsl\\attach_micropump.py --distro {args.distro} --auto-ftdi")
     print("=" * 50)
 

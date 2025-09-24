@@ -6,77 +6,113 @@ import logging
 import os
 from pathlib import Path
 from typing import Optional, List, Tuple
-from dotenv import load_dotenv
 
 
 class Pump_wsl:
     """WSL pump controller with same interface as Pump_win."""
     
     def __init__(self, port: Optional[str] = None, baudrate: int = 9600):
-        self.distro: Optional[str] = None
         self.port = port
         self.baudrate = baudrate
         self.last_error = ""
         self.is_initialized = False
         self._available_ports: List[str] = []
-        
-        # Load VID/PID from .env file for consistent device identification
+
+        self._project_root = Path(__file__).parent.parent
+        self._env_path = self._project_root / ".env"
+        self.distro: Optional[str] = None
         self.vid: Optional[int] = None
         self.pid: Optional[int] = None
-        self._load_device_ids_from_env()
-       
-    def _load_device_ids_from_env(self) -> None:
-        """Load pump VID/PID from .env file for device identification."""
+        self._load_config_from_env()
+
+    def _load_config_from_env(self) -> None:
+        """Load WSL pump configuration from the local .env file."""
+        self.distro = None
+        self.vid = None
+        self.pid = None
+
+        if not self._env_path.exists():
+            logging.info("WSL pump configuration file (.env) not found yet")
+            return
+
         try:
-            # Find project root (where .env should be located)
-            project_root = Path(__file__).parent.parent
-            env_file = project_root / ".env"
-            
-            if env_file.exists():
-                load_dotenv(env_file)
-                self.vid = int(os.getenv('PUMP_VID', '0'))
-                self.pid = int(os.getenv('PUMP_PID', '0'))
-                
-                if self.vid > 0 and self.pid > 0:
-                    logging.info(f"WSL pump loaded VID/PID from .env: {self.vid:04X}:{self.pid:04X}")
-                else:
-                    logging.warning("Invalid or missing PUMP_VID/PUMP_PID in .env file")
+            with open(self._env_path, "r", encoding="utf-8") as handle:
+                for raw_line in handle:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    key, value = line.split("=", 1)
+                    key = key.strip()
+                    value = value.strip().strip("\"").strip("'")
+                    if key == "WSL_DISTRO" and value:
+                        self.distro = value
+                    elif key == "PUMP_VID":
+                        try:
+                            parsed = int(value)
+                            self.vid = parsed if parsed > 0 else None
+                        except ValueError:
+                            self.vid = None
+                    elif key == "PUMP_PID":
+                        try:
+                            parsed = int(value)
+                            self.pid = parsed if parsed > 0 else None
+                        except ValueError:
+                            self.pid = None
+
+            if self.vid and self.pid:
+                logging.info(f"WSL pump loaded VID/PID from .env: {self.vid:04X}:{self.pid:04X}")
             else:
-                logging.warning("No .env file found, VID/PID resolution disabled for WSL pump")
-                
-        except Exception as e:
-            logging.warning(f"WSL pump failed to load VID/PID from .env: {e}")
-            self.vid = None
-            self.pid = None
-        try:
-            # Find project root (where .env should be located)
-            project_root = Path(__file__).parent.parent
-            env_file = project_root / ".env"
-            
-            if env_file.exists():
-                load_dotenv(env_file)
-                self.vid = int(os.getenv('PUMP_VID', '0'))
-                self.pid = int(os.getenv('PUMP_PID', '0'))
-                
-                if self.vid > 0 and self.pid > 0:
-                    logging.info(f"WSL pump loaded VID/PID from .env: {self.vid:04X}:{self.pid:04X}")
-                else:
-                    logging.warning("Invalid or missing PUMP_VID/PUMP_PID in .env file")
-            else:
-                logging.warning("No .env file found, VID/PID resolution disabled for WSL pump")
-                
-        except Exception as e:
-            logging.warning(f"WSL pump failed to load VID/PID from .env: {e}")
+                logging.warning("WSL pump VID/PID missing in .env; device discovery will fall back to autodetect")
+
+        except Exception as exc:
+            logging.warning(f"WSL pump failed to load configuration from .env: {exc}")
+            self.distro = None
             self.vid = None
             self.pid = None
     
+    def _ensure_env_configuration(self) -> bool:
+        '''Make sure .env contains required configuration, invoking attach_micropump if needed.'''
+        self._load_config_from_env()
+
+        missing_items: List[str] = []
+        if not self._env_path.exists():
+            missing_items.append('.env file')
+        if not self.distro:
+            missing_items.append('WSL_DISTRO')
+        if not (self.vid and self.pid):
+            missing_items.append('PUMP_VID/PUMP_PID')
+
+        distro_ready = False
+        if self.distro:
+            distro_ready = self._check_wsl_distro()
+            if not distro_ready and 'WSL_DISTRO' not in missing_items:
+                missing_items.append(f"WSL distro '{self.distro}'")
+
+        if missing_items:
+            print('Missing WSL pump configuration: ' + ', '.join(missing_items))
+            print('Launching attach_micropump to complete setup...')
+            if not self._auto_fix_usb_attachment(non_interactive=False):
+                self.last_error = 'attach_micropump could not update .env configuration'
+                return False
+
+            self._load_config_from_env()
+            if not self.distro or not (self.vid and self.pid):
+                self.last_error = 'attach_micropump did not populate required .env entries'
+                return False
+
+            if not self._check_wsl_distro():
+                self.last_error = f"Configured WSL distribution '{self.distro}' is not available"
+                return False
+
+        return True
+
     def initialize(self) -> bool:
         """Initialize pump via WSL with comprehensive setup and validation."""
         try:
             # Step 1: Check if WSL is available
             if not self._check_wsl_available():
-                print("🔧 WSL not available.")
-                print("💡 Please install WSL:")
+                print("WRENCH WSL not available.")
+                print("NOTE Please install WSL:")
                 print("   1. Open PowerShell as Administrator")
                 print("   2. Run: wsl --install")
                 print("   3. Restart your computer")
@@ -84,8 +120,8 @@ class Pump_wsl:
                 self.last_error = "WSL not installed. Please install WSL manually."
                 return False
             
-            # Step 2: Load or configure WSL distribution
-            if not self._setup_wsl_distribution():
+            # Step 2: Ensure configuration is present in .env
+            if not self._ensure_env_configuration():
                 return False
             
             # Step 3: Find available serial ports in WSL
@@ -93,9 +129,9 @@ class Pump_wsl:
                 self.port = self._find_wsl_pump_port()
                 if self.port is None:
                     # Try auto-fix by attaching USB device
-                    print("🔧 No serial ports found. Attempting automatic USB device attachment...")
+                    print("WRENCH No serial ports found. Attempting automatic USB device attachment...")
                     if self._auto_fix_usb_attachment():
-                        print("🔄 Retrying after USB attachment...")
+                        print("REFRESH Retrying after USB attachment...")
                         time.sleep(2)  # Give devices time to appear
                         self.port = self._find_wsl_pump_port()
                         if self.port is None:
@@ -118,222 +154,6 @@ class Pump_wsl:
             self.last_error = f'Unexpected error during WSL initialization: {e}'
             logging.error(self.last_error)
             return False
-    def _setup_wsl_distribution(self) -> bool:
-        """Setup WSL distribution - load from .env or help user configure one."""
-        # Try to load from .env file
-        self.distro = self._load_wsl_distro_from_env()
-        
-        if self.distro is not None:
-            # We have a distro name from .env, check if it's installed
-            if self._check_wsl_distro():
-                print(f"✅ Using WSL distribution '{self.distro}' from .env file")
-                return True
-            else:
-                # Try to map the configured name to a real installed name (e.g., Ubuntu -> Ubuntu-22.04)
-                resolved = self._resolve_installed_distro_name(self.distro)
-                if resolved:
-                    print(f"🔁 Mapping configured distro '{self.distro}' → installed '{resolved}'")
-                    self.distro = resolved
-                    # Persist the exact name to .env to avoid future prompts
-                    self._save_distro_to_env(self.distro)
-                    return True
-                print(f"❌ WSL distribution '{self.distro}' from .env file is not installed")
-                return self._handle_missing_distro()
-        else:
-            # No distro in .env file, help user choose one
-            return self._handle_missing_distro()
-
-    def _resolve_installed_distro_name(self, configured: str) -> Optional[str]:
-        """Resolve a configured distro name to an installed one (exact or prefix match)."""
-        try:
-            available = self._get_available_distros()
-            if not available:
-                return None
-            cfg = configured.strip().lower()
-            # Exact, case-insensitive
-            for d in available:
-                if d.strip().lower() == cfg:
-                    return d
-            # Prefix match (e.g., Ubuntu vs Ubuntu-22.04)
-            for d in available:
-                if d.strip().lower().startswith(cfg):
-                    return d
-            return None
-        except Exception:
-            return None
-    
-    def _handle_missing_distro(self) -> bool:
-        """Handle case where WSL distro is missing or not configured."""
-        available_distros = self._get_available_distros()
-        
-        if available_distros:
-            print("🔍 Available WSL distributions:")
-            for i, distro in enumerate(available_distros, 1):
-                print(f"   {i}. {distro}")
-            
-            print("\n� Please select a WSL distribution:")
-            print("   Enter the number (1, 2, etc.) of your preferred distribution")
-            print("   Or press Enter to auto-select Ubuntu if available")
-            
-            try:
-                # Prompt for user input
-                choice = input("\nYour choice: ").strip()
-                
-                if choice == "":
-                    # Auto-select Ubuntu if available, otherwise first available
-                    if "Ubuntu" in available_distros:
-                        self.distro = "Ubuntu"
-                        print(f"🔧 Auto-selected: {self.distro}")
-                    else:
-                        self.distro = available_distros[0]
-                        print(f"🔧 Auto-selected: {self.distro}")
-                else:
-                    # User made a choice
-                    choice_num = int(choice)
-                    if 1 <= choice_num <= len(available_distros):
-                        self.distro = available_distros[choice_num - 1]
-                        print(f"✅ Selected: {self.distro}")
-                    else:
-                        print(f"❌ Invalid choice. Auto-selecting first available: {available_distros[0]}")
-                        self.distro = available_distros[0]
-                        
-            except (ValueError, KeyboardInterrupt):
-                print(f"🔧 Using default: {available_distros[0]}")
-                self.distro = available_distros[0]
-            
-            # Save to .env file and create complete config
-            self._create_complete_env_file(self.distro)
-            return True
-        else:
-            print("❌ No WSL distributions installed")
-            print("📋 Please install a WSL distribution:")
-            print("   1. Open Microsoft Store")
-            print("   2. Search for 'Debian' or 'Ubuntu'")
-            print("   3. Install and run it once to complete setup")
-            self.last_error = "No WSL distributions installed"
-            return False
-    def _load_wsl_distro_from_env(self) -> Optional[str]:
-        """Load WSL distribution name from .env file, with fallback to None."""
-        try:
-            # Find project root (where .env should be located)
-            project_root = Path(__file__).parent.parent
-            env_file = project_root / ".env"
-            
-            if not env_file.exists():
-                print(f"⚠️  .env file not found at {env_file}")
-                return None
-            
-            # Read .env file and look for WSL_DISTRO
-            with open(env_file, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if line.startswith('WSL_DISTRO=') and not line.startswith('#'):
-                        distro = line.split('=', 1)[1].strip().strip('"\'')
-                        if distro:
-                            return distro
-            
-            # WSL_DISTRO not found in .env file
-            print("⚠️  WSL_DISTRO not found in .env file")
-            return None
-            
-        except Exception as e:
-            print(f"⚠️  Error reading .env file: {e}")
-            return None
-    
-    def _get_available_distros(self) -> List[str]:
-        """Get list of installed WSL distributions."""
-        try:
-            result = subprocess.run([
-                "wsl", "-l", "-q"
-            ], capture_output=True, text=True, check=False, timeout=5)
-            
-            if result.returncode == 0:
-                # Clean up the output - remove null characters and extra whitespace
-                output = result.stdout.replace('\x00', '').strip()
-                distros = [line.strip().replace('*', '') for line in output.split('\n') if line.strip()]
-                return [d for d in distros if d and not d.isspace()]  # Filter out empty strings and whitespace
-            return []
-            
-        except Exception:
-            return []
-    
-    def _create_complete_env_file(self, distro: str) -> bool:
-        """Create a complete .env file with VID/PID and WSL distribution."""
-        try:
-            project_root = Path(__file__).parent.parent
-            env_file = project_root / ".env"
-            
-            # Default VID/PID for Bartels micropump (FTDI-based)
-            default_vid = 1027  # 0x0403 in decimal
-            default_pid = 46272  # 0xB4C0 in decimal
-            arduino_vid = 9025  # 0x2341 in decimal
-            arduino_pid = 67    # 0x0043 in decimal
-            
-            env_content = f"""# .env file for micropump_controller project
-# Device IDs for serial port resolution
-PUMP_VID={default_vid}
-PUMP_PID={default_pid}
-ARDUINO_VID={arduino_vid}
-ARDUINO_PID={arduino_pid}
-
-# WSL Configuration (automatically managed by pump_wsl.py)
-# WSL_DISTRO=Debian  # This will be set automatically when WSL distribution is successfully installed
-WSL_DISTRO={distro}
-"""
-            
-            # Write the complete .env file
-            with open(env_file, 'w') as f:
-                f.write(env_content)
-            
-            print(f"✅ Created complete .env file with:")
-            print(f"   - PUMP_VID={default_vid} (0x{default_vid:04X})")
-            print(f"   - PUMP_PID={default_pid} (0x{default_pid:04X})")
-            print(f"   - WSL_DISTRO={distro}")
-            
-            # Update our own VID/PID since we just created the file
-            self.vid = default_vid
-            self.pid = default_pid
-            
-            return True
-            
-        except Exception as e:
-            print(f"⚠️  Failed to create .env file: {e}")
-            return False
-    
-    def _save_distro_to_env(self, distro: str) -> bool:
-        """Save WSL distribution name to .env file."""
-        try:
-            project_root = Path(__file__).parent.parent
-            env_file = project_root / ".env"
-            
-            # Read existing .env content
-            existing_lines = []
-            if env_file.exists():
-                with open(env_file, 'r') as f:
-                    existing_lines = f.readlines()
-            
-            # Update or add WSL_DISTRO line
-            wsl_distro_found = False
-            for i, line in enumerate(existing_lines):
-                if line.strip().startswith('WSL_DISTRO='):
-                    existing_lines[i] = f"WSL_DISTRO={distro}\n"
-                    wsl_distro_found = True
-                    break
-            
-            if not wsl_distro_found:
-                existing_lines.append(f"WSL_DISTRO={distro}\n")
-            
-            # Write back to file
-            with open(env_file, 'w') as f:
-                f.writelines(existing_lines)
-            
-            print(f"✅ Saved WSL_DISTRO={distro} to .env file")
-            return True
-            
-        except Exception as e:
-            print(f"⚠️  Failed to save to .env file: {e}")
-            return False
-         
     def _check_wsl_available(self) -> bool:
         """Check if WSL is installed and working at all."""
         try:
@@ -344,19 +164,19 @@ WSL_DISTRO={distro}
             
             if result.returncode != 0:
                 self.last_error = "WSL is not installed or not working"
-                print("❌ WSL not available")
+                print("FAIL WSL not available")
                 return False
             
-            print("✅ WSL is available")
+            print("OK WSL is available")
             return True
             
         except subprocess.TimeoutExpired:
             self.last_error = "WSL status check timed out"
-            print("❌ WSL status check timed out")
+            print("FAIL WSL status check timed out")
             return False
         except Exception as e:
             self.last_error = f"Error checking WSL availability: {e}"
-            print(f"❌ WSL check failed: {e}")
+            print(f"FAIL WSL check failed: {e}")
             return False
     
     def _check_wsl_distro(self) -> bool:
@@ -385,18 +205,18 @@ WSL_DISTRO={distro}
                     if 'running' in line.lower():
                         distro_running = True
                     elif 'stopped' in line.lower():
-                        print(f"⚠️  WSL distro '{self.distro}' is stopped - this will reset USB attachments")
-                        print("💡 Starting WSL distribution...")
+                        print(f"WARNING  WSL distro '{self.distro}' is stopped - this will reset USB attachments")
+                        print("NOTE Starting WSL distribution...")
                         # Start the distro
                         start_result = subprocess.run([
                             "wsl", "-d", self.distro, "-e", "echo", "WSL started"
                         ], capture_output=True, text=True, check=False, timeout=15)
                         
                         if start_result.returncode == 0:
-                            print(f"✅ WSL distro '{self.distro}' started successfully")
+                            print(f"OK WSL distro '{self.distro}' started successfully")
                             distro_running = True
                         else:
-                            print(f"❌ Failed to start WSL distro '{self.distro}'")
+                            print(f"FAIL Failed to start WSL distro '{self.distro}'")
                     break
             
             if not distro_found:
@@ -446,10 +266,10 @@ WSL_DISTRO={distro}
             if self.vid is not None and self.pid is not None:
                 port = self._find_wsl_port_by_vid_pid()
                 if port:
-                    print(f"✅ Found WSL pump using VID/PID {self.vid:04X}:{self.pid:04X}: {port}")
+                    print(f"OK Found WSL pump using VID/PID {self.vid:04X}:{self.pid:04X}: {port}")
                     return port
                 else:
-                    print(f"⚠️  WSL VID/PID lookup failed for {self.vid:04X}:{self.pid:04X}")
+                    print(f"WARNING  WSL VID/PID lookup failed for {self.vid:04X}:{self.pid:04X}")
             
             # Strategy 2: Fall back to listing all available serial ports
             port_cmd = "ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo 'no_ports'"
@@ -462,7 +282,7 @@ WSL_DISTRO={distro}
                 ports = [line.strip() for line in result.stdout.strip().split('\n') if line.strip()]
                 if ports:
                     self._available_ports = ports
-                    print(f"✅ Found WSL ports (fallback): {ports[0]}")
+                    print(f"OK Found WSL ports (fallback): {ports[0]}")
                     return ports[0]  # Return first available port
             
             return None
@@ -567,12 +387,12 @@ done 2>/dev/null || echo "no_port_found"'''
         
         return candidates
     
-    def _auto_fix_usb_attachment(self) -> bool:
-        """Attempt to automatically attach USB devices to WSL using admin tools."""
-        if self.distro is None:
+    def _auto_fix_usb_attachment(self, non_interactive: bool = True) -> bool:
+        """Attempt to attach the USB device to WSL, optionally prompting the user."""
+        if self.distro is None and non_interactive:
             self.last_error = "No WSL distribution configured"
             return False
-            
+
         try:
             # Find the project root and admin batch file
             project_root = Path(__file__).parent.parent
@@ -580,20 +400,23 @@ done 2>/dev/null || echo "no_port_found"'''
             attach_script = project_root / "via_wsl" / "attach_micropump.py"
             
             if not admin_batch.exists():
-                print(f"❌ Admin batch file not found: {admin_batch}")
+                print(f"FAIL Admin batch file not found: {admin_batch}")
                 return False
             
             if not attach_script.exists():
-                print(f"❌ Attach script not found: {attach_script}")
+                print(f"FAIL Attach script not found: {attach_script}")
                 return False
             
-            print("🔒 Running USB attachment as admin (you may see a UAC prompt)...")
+            print("LOCK Running USB attachment as admin (you may see a UAC prompt)...")
             print("   Note: If FTDI support needs installing in WSL, you may be prompted for your sudo password once.")
             
             # Run attach_micropump.py via the admin batch file with current distro
             # Run in non-interactive mode to avoid prompts during automated init
             env = os.environ.copy()
-            env["PUMP_NON_INTERACTIVE"] = "1"
+            if non_interactive:
+                env["PUMP_NON_INTERACTIVE"] = "1"
+            else:
+                env.pop("PUMP_NON_INTERACTIVE", None)
             # Optional: pass sudo password for non-interactive FTDI setup
             sudo_pass = os.getenv("PUMP_WSL_SUDO_PASS")
             if sudo_pass:
@@ -607,9 +430,11 @@ done 2>/dev/null || echo "no_port_found"'''
             cmd = [
                 str(admin_batch),
                 "attach_micropump.py",
-                "--distro", self.distro,
-                "--vidpid", vidpid,
             ]
+            if self.distro:
+                cmd.extend(["--distro", self.distro])
+            if vidpid:
+                cmd.extend(["--vidpid", vidpid])
 
             # Auto-enable FTDI install unless explicitly disabled
             auto_ftdi_env = (os.getenv("PUMP_WSL_FTDI_AUTO", "1") or "1").strip().lower()
@@ -625,18 +450,18 @@ done 2>/dev/null || echo "no_port_found"'''
             )  # allow 3 minutes
             
             if result.returncode == 0:
-                print("✅ USB attachment completed successfully")
+                print("OK USB attachment completed successfully")
                 return True
             else:
-                print(f"⚠️  USB attachment completed with exit code: {result.returncode}")
+                print(f"WARNING  USB attachment completed with exit code: {result.returncode}")
                 # Even non-zero exit codes might have partially worked
                 return True
                 
         except subprocess.TimeoutExpired:
-            print("❌ USB attachment timed out")
+            print("FAIL USB attachment timed out")
             return False
         except Exception as e:
-            print(f"❌ Failed to run USB attachment: {e}")
+            print(f"FAIL Failed to run USB attachment: {e}")
             return False
     
     def _test_wsl_communication(self) -> bool:
@@ -734,9 +559,9 @@ done 2>/dev/null || echo "no_port_found"'''
     def get_suggested_fix(self) -> str:
         """Get suggested fix for the last error."""
         if "not installed" in self.last_error or "WSL not available" in self.last_error:
-            return "Install WSL: Open PowerShell as Admin → Run 'wsl --install' → Restart computer"
+            return "Install WSL: Open PowerShell as Admin -> Run 'wsl --install' -> Restart computer"
         elif "not found" in self.last_error or "Microsoft Store" in self.last_error:
-            return "Install WSL distribution: Open Microsoft Store → Search 'Debian' or 'Ubuntu' → Install → Run once to setup"
+            return "Install WSL distribution: Open Microsoft Store -> Search 'Debian' or 'Ubuntu' -> Install -> Run once to setup"
         elif "No serial ports" in self.last_error:
             return "USB device auto-attachment attempted. Check if pump is connected and powered"
         elif "not responding" in self.last_error:

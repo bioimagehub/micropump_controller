@@ -30,13 +30,13 @@ class ValveController:
             return
         
         import time
-        logging.info("🔧 Performing valve initialization test...")
+        logging.info("WRENCH Performing valve initialization test...")
         logging.info("  Valve ON...")
         self.on()
         time.sleep(0.5)  # 500ms on
         logging.info("  Valve OFF...")
         self.off()
-        logging.info("✅ Valve initialization test complete - valve is working!")
+        logging.info("OK Valve initialization test complete - valve is working!")
 
     def close(self):
         """Close serial connection."""

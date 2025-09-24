@@ -1,4 +1,4 @@
-﻿"""3D stage controller for GRBL-based CNC pipetting robot."""
+"""3D stage controller for GRBL-based CNC pipetting robot."""
 
 import yaml
 import logging
@@ -172,7 +172,7 @@ class Stage3DController:
             return
         
         try:
-            logging.info("🔧 Performing initialization movement test...")
+            logging.info("WRENCH Performing initialization movement test...")
             
             # Set up coordinate system
             self.ser.write(b"G21\n")  # mm units
@@ -194,7 +194,7 @@ class Stage3DController:
             time.sleep(0.3)
             self.ser.readline()  # Read response
             
-            logging.info("✅ Initialization test complete - stage is working!")
+            logging.info("OK Initialization test complete - stage is working!")
             
         except Exception as e:
             logging.warning(f"Initialization test failed: {e}")
