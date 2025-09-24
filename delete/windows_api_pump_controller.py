@@ -81,7 +81,7 @@ if __name__ == "__main__":
         import sys
         import os
         sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
-        from resolve_ports import find_pump_port_by_vid_pid
+        from delete.resolve_ports import find_pump_port_by_vid_pid
         
         # Find pump
         port = find_pump_port_by_vid_pid(0x0403, 0xB4C0)

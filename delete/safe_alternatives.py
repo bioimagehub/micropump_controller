@@ -257,7 +257,7 @@ print(f"Results: PyUSB={pyusb_ok}, Serial={serial_ok}")
         # Method 2: Test PowerShell approach
         print("\\n📍 Method 2: PowerShell SerialPort class")
         try:
-            from src.resolve_ports import find_pump_port_by_vid_pid
+            from delete.resolve_ports import find_pump_port_by_vid_pid
             pump_port = find_pump_port_by_vid_pid(0x0403, 0xB4C0)
             
             ps_script = f'''

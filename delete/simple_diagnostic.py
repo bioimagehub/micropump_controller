@@ -12,7 +12,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from pump import PumpController
-from resolve_ports import find_pump_port_by_vid_pid
+from delete.resolve_ports import find_pump_port_by_vid_pid
 
 def test_working_vs_api():
     """Compare working driver vs Windows API."""

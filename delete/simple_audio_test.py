@@ -12,7 +12,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 try:
     from pump import PumpController
-    from resolve_ports import find_pump_port_by_vid_pid
+    from delete.resolve_ports import find_pump_port_by_vid_pid
 except ImportError as e:
     print(f"Import error: {e}")
     print("Could not import pump modules. Exiting...")

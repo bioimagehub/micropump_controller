@@ -90,7 +90,7 @@ except ImportError:  # pragma: no cover - optional dependency
 # Local imports - simplified structure with single files per device
 from src.pump import PumpController
 from src.valve import ValveController
-from src.resolve_ports import get_port_by_id
+from delete.resolve_ports import get_port_by_id
 
 
 class MockPump:

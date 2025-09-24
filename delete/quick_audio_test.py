@@ -7,7 +7,7 @@ import os
 
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from pump import PumpController
-from resolve_ports import find_pump_port_by_vid_pid
+from delete.resolve_ports import find_pump_port_by_vid_pid
 
 # Quick 1-second test
 print("🎤 Quick Audio Test")

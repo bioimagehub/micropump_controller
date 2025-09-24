@@ -2,17 +2,12 @@
 
 import time
 import serial
+import serial.tools.list_ports
 import logging
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Optional, List, Tuple
 from dotenv import load_dotenv
-
-try:
-    from .resolve_ports import list_all_ports, find_pump_port_by_description, find_pump_port_by_vid_pid, get_port_by_id
-except ImportError:
-    # Fallback for when imported from different directory
-    from resolve_ports import list_all_ports, find_pump_port_by_description, find_pump_port_by_vid_pid, get_port_by_id
 
 
 class Pump_win:
@@ -99,6 +94,134 @@ WSL_DISTRO=Ubuntu
             print(f"⚠️  Failed to create default .env file: {e}")
             return False
     
+    def _list_all_ports(self) -> List[Tuple[str, str, Optional[str], Optional[str]]]:
+        """List all available serial ports with description, VID and PID.
+        
+        Returns:
+            List of tuples (device, description, vid, pid) where
+            vid and pid are hexadecimal strings (e.g. "0403") or None.
+        """
+        ports = serial.tools.list_ports.comports()
+        results = []
+        for port in ports:
+            vid = f"{port.vid:04X}" if getattr(port, 'vid', None) is not None else None
+            pid = f"{port.pid:04X}" if getattr(port, 'pid', None) is not None else None
+            results.append((port.device, port.description, vid, pid))
+        return results
+    
+    def _find_pump_port_by_vid_pid(self, vid: int, pid: int) -> str:
+        """Find the serial port for a device based on its VID and PID.
+        
+        Args:
+            vid: The Vendor ID of the device
+            pid: The Product ID of the device
+            
+        Returns:
+            str: The device's serial port (e.g., 'COM3')
+            
+        Raises:
+            Exception: If no matching device is found
+        """
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            if port.vid == vid and port.pid == pid:
+                return port.device
+        raise Exception(f"No device found with VID={vid:04X} and PID={pid:04X}")
+    
+    def _find_pump_port_by_description(self, keyword: str) -> str:
+        """Find the serial port for a device based on a keyword in its description.
+        
+        Args:
+            keyword: A unique keyword to identify the device (e.g., 'Bartels')
+            
+        Returns:
+            str: The device's serial port (e.g., 'COM3')
+            
+        Raises:
+            Exception: If no matching device is found
+        """
+        ports = serial.tools.list_ports.comports()
+        for port in ports:
+            if keyword.lower() in port.description.lower():
+                return port.device
+        raise Exception(f"No device found with keyword '{keyword}' in description")
+    
+    def _get_port_by_id(self, device: str) -> str:
+        """Get the serial port for a device using VID/PID from current instance.
+        
+        Args:
+            device: Either 'pump' or 'arduino'
+            
+        Returns:
+            str: The device's serial port (e.g., 'COM3')
+            
+        Raises:
+            Exception: If no matching device is found or VID/PID not loaded
+        """
+        if device.lower() == 'pump':
+            if self.vid is None or self.pid is None:
+                raise Exception("Pump VID/PID not loaded from .env")
+            vid, pid = self.vid, self.pid
+        else:
+            # For Arduino (valve), try to load from .env if needed
+            project_root = Path(__file__).parent.parent
+            env_file = project_root / ".env"
+            if env_file.exists():
+                load_dotenv(env_file)
+                vid = int(os.getenv('ARDUINO_VID', '0'))
+                pid = int(os.getenv('ARDUINO_PID', '0'))
+                if vid == 0 or pid == 0:
+                    raise Exception(f"No valid {device} VID/PID in .env file")
+            else:
+                raise Exception(f"No .env file found for {device} VID/PID lookup")
+        
+        return self._find_pump_port_by_vid_pid(vid, pid)
+    
+    @classmethod
+    def list_available_devices(cls) -> List[Tuple[str, str, Optional[str], Optional[str]]]:
+        """Class method to list all available serial devices without creating an instance.
+        
+        Returns:
+            List of tuples (port, description, vid_hex, pid_hex)
+        """
+        ports = serial.tools.list_ports.comports()
+        results = []
+        for port in ports:
+            vid = f"{port.vid:04X}" if getattr(port, 'vid', None) is not None else None
+            pid = f"{port.pid:04X}" if getattr(port, 'pid', None) is not None else None
+            results.append((port.device, port.description, vid, pid))
+        return results
+    
+    @classmethod
+    def find_pump_candidates(cls) -> List[Tuple[str, str, str]]:
+        """Class method to find potential pump devices based on common patterns.
+        
+        Returns:
+            List of tuples (port, description, reason)
+        """
+        candidates = []
+        ports = serial.tools.list_ports.comports()
+        
+        pump_keywords = ["micropump", "bartels", "ftdi", "ft232"]
+        ftdi_vids = [0x0403]  # FTDI vendor ID
+        
+        for port in ports:
+            reasons = []
+            
+            # Check for description keywords
+            for keyword in pump_keywords:
+                if keyword.lower() in port.description.lower():
+                    reasons.append(f"description contains '{keyword}'")
+            
+            # Check for FTDI VID
+            if port.vid in ftdi_vids:
+                reasons.append(f"FTDI device (VID:{port.vid:04X})")
+            
+            if reasons:
+                candidates.append((port.device, port.description, ", ".join(reasons)))
+        
+        return candidates
+    
     def initialize(self) -> bool:
         """Initialize pump with automatic COM port detection if needed."""
         try:
@@ -140,7 +263,7 @@ WSL_DISTRO=Ubuntu
     def _find_pump_port(self) -> Optional[str]:
         """Find a suitable COM port for the pump using layered detection strategy."""
         # Get all available ports quickly
-        all_ports = list_all_ports()
+        all_ports = self._list_all_ports()
         if not all_ports:
             logging.info("No COM ports found")
             return None
@@ -148,25 +271,25 @@ WSL_DISTRO=Ubuntu
         # Strategy 1: Use stored VID/PID if available (most accurate)
         if self.vid is not None and self.pid is not None:
             try:
-                port = find_pump_port_by_vid_pid(self.vid, self.pid)
+                port = self._find_pump_port_by_vid_pid(self.vid, self.pid)
                 print(f"✅ Found pump using stored VID/PID {self.vid:04X}:{self.pid:04X}: {port}")
                 return port
             except Exception:
                 print(f"⚠️  Stored VID/PID lookup failed: No pump device found with VID={self.vid:04X} and PID={self.pid:04X}")
         
-        # Strategy 2: Try get_port_by_id as fallback (uses .env via resolve_ports)
+        # Strategy 2: Try get_port_by_id as fallback (uses current .env)
         try:
-            port = get_port_by_id('pump')
-            print(f"✅ Found pump using resolve_ports .env lookup: {port}")
+            port = self._get_port_by_id('pump')
+            print(f"✅ Found pump using .env lookup: {port}")
             return port
         except Exception:
-            print(f"⚠️  resolve_ports .env lookup failed")
+            print(f"⚠️  .env VID/PID lookup failed")
         
         # Strategy 3: Try to find by description keywords
         pump_keywords = ["micropump", "bartels", "ftdi", "ft232", "usb serial", "usb micropump control"]
         for keyword in pump_keywords:
             try:
-                port = find_pump_port_by_description(keyword)
+                port = self._find_pump_port_by_description(keyword)
                 print(f"✅ Found pump by description '{keyword}': {port}")
                 return port
             except Exception:
@@ -182,7 +305,7 @@ WSL_DISTRO=Ubuntu
         
         for vid, pid in ftdi_combinations:
             try:
-                port = find_pump_port_by_vid_pid(vid, pid)
+                port = self._find_pump_port_by_vid_pid(vid, pid)
                 print(f"✅ Found pump by VID/PID {vid:04X}:{pid:04X}: {port}")
                 return port
             except Exception:

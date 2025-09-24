@@ -5,7 +5,7 @@ import time
 import logging
 import os
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional, List, Tuple
 from dotenv import load_dotenv
 
 
@@ -473,6 +473,59 @@ done 2>/dev/null || echo "no_port_found"'''
         except Exception as e:
             logging.warning(f"WSL VID/PID port detection failed: {e}")
             return None
+    
+    @classmethod  
+    def list_available_wsl_distros(cls) -> List[str]:
+        """Class method to list available WSL distributions without creating an instance."""
+        try:
+            result = subprocess.run([
+                "wsl", "-l", "-q"
+            ], capture_output=True, text=True, check=False, timeout=5)
+            
+            if result.returncode == 0:
+                raw = (result.stdout or "").replace('\x00', '').strip()
+                return [line.strip().replace('*', '') for line in raw.split('\n') if line.strip()]
+            return []
+            
+        except Exception:
+            return []
+    
+    @classmethod
+    def find_pump_candidates_in_wsl(cls, distro: Optional[str] = None) -> List[Tuple[str, str]]:
+        """Class method to find potential pump devices in WSL.
+        
+        Args:
+            distro: WSL distribution to check (if None, uses first available)
+            
+        Returns:
+            List of tuples (port, detection_method)
+        """
+        if distro is None:
+            available_distros = cls.list_available_wsl_distros()
+            if not available_distros:
+                return []
+            distro = available_distros[0]
+        
+        candidates = []
+        
+        try:
+            # Check for USB serial devices
+            port_cmd = "ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo 'no_ports'"
+            
+            result = subprocess.run([
+                "wsl", "-d", distro, "-e", "bash", "-c", port_cmd
+            ], capture_output=True, text=True, check=False, timeout=10)
+            
+            if result.returncode == 0 and "no_ports" not in result.stdout:
+                ports = result.stdout.strip().split('\n')
+                for port in ports:
+                    if port.strip():
+                        candidates.append((port.strip(), "USB serial device"))
+        
+        except Exception:
+            pass
+        
+        return candidates
     
     def _auto_fix_usb_attachment(self) -> bool:
         """Attempt to automatically attach USB devices to WSL using admin tools."""

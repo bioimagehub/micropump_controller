@@ -32,7 +32,7 @@ from pump_libusb import PumpController as PumpControllerLibUSB
 from valve import ValveController  
 from microscope import MicroscopeController
 from stage3d import Stage3DController
-from resolve_ports import find_pump_port_by_vid_pid, list_all_ports
+from delete.resolve_ports import find_pump_port_by_vid_pid, list_all_ports
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
