@@ -88,9 +88,9 @@ except ImportError:  # pragma: no cover - optional dependency
     load_dotenv = None  # type: ignore
 
 # Local imports - simplified structure with single files per device
-from src.pump import PumpController
+from src.pump_win import Pump_win
+from src.pump_wsl import Pump_wsl
 from src.valve import ValveController
-from delete.resolve_ports import get_port_by_id
 
 
 class MockPump:
@@ -190,16 +190,6 @@ def resolve_ports_from_env(prefer_detection: bool = True) -> dict:
 
     detected_pump = None
     detected_valve = None
-    if prefer_detection:
-        # Attempt detection; suppress exceptions and fall back
-        try:
-            detected_pump = get_port_by_id("pump")
-        except Exception:
-            detected_pump = None
-        try:
-            detected_valve = get_port_by_id("arduino")
-        except Exception:
-            detected_valve = None
 
     pump_port = pump_port_env or detected_pump or "COM4"
     valve_port = valve_port_env or detected_valve or "COM5"
@@ -252,10 +242,11 @@ def run_sequence(
     *,
     dry_run: bool = False,
 ):
-    for step in config.get("run", []):
+    for idx, step in enumerate(config.get("run", [])):
         if not isinstance(step, dict):
             print(f"[WARN] Step ignored (not a dict): {step}")
             continue
+        print(f"[STEP {idx+1}] Executing: {step}")
         # Pump ON (apply profile)
         if "pump_on" in step:
             if not pump:
@@ -400,6 +391,7 @@ def run_sequence(
             commands: List[dict] = step.get("commands", [])
             print(f"[BLOCK] {total}s repeating {len(commands)} commands")
             block_start = time.time()
+            block_count = 0
             while (time.time() - block_start) < total:
                 for cmd in commands:
                     remaining = total - (time.time() - block_start)
@@ -407,20 +399,23 @@ def run_sequence(
                         break
                     action = cmd.get("action")
                     segment = float(cmd.get("duration", 0))
+                    block_count += 1
+                    print(f"    [BLOCK STEP {block_count}] {action} for {segment}s (remaining: {remaining:.1f}s)")
                     if action == "valve_on":
                         if not valve:
                             sys.exit("Valve requested but not initialized.")
-                        print(f"  [VALVE] ON for {segment}s")
                         valve.on()
+                        print(f"      [VALVE] ON command sent.")
                         time.sleep(segment)
                     elif action == "valve_off":
                         if not valve:
                             sys.exit("Valve requested but not initialized.")
-                        print(f"  [VALVE] OFF for {segment}s")
                         valve.off()
+                        print(f"      [VALVE] OFF command sent.")
                         time.sleep(segment)
                     else:
-                        print(f"  [WARN] Unknown action '{action}' in block")
+                        print(f"      [WARN] Unknown action '{action}' in block")
+            print(f"[BLOCK] Completed after {time.time() - block_start:.1f}s.")
             continue
         # Simple wait
         if list(step.keys()) == ["duration"]:
@@ -456,8 +451,6 @@ def main(argv: list[str] | None = None) -> int:
     valve_enabled = bool(required_hw.get("valve", False))
     dry_run = args.dry_run
 
-    env_ports = resolve_ports_from_env(prefer_detection=not args.no_detect) if not dry_run else {}
-
     pump_profiles = config.get("pump settings", {}) if pump_enabled else {}
     if pump_enabled and not pump_profiles:
         print("Pump enabled but no 'pump settings' found in YAML file.")
@@ -469,44 +462,25 @@ def main(argv: list[str] | None = None) -> int:
         if dry_run:
             pump = MockPump()
         else:
-            first_profile = next(iter(pump_profiles.values()))
-            pump_cfg = {
-                "pump_port": env_ports["pump_port"],
-                "bartels_freq": first_profile.get("freq", 50),
-                "bartels_voltage": first_profile.get("voltage", 100),
-            }
-            print(
-                f"[INFO] Pump port resolved: {pump_cfg['pump_port']} "
-                f"(env={env_ports.get('pump_from_env')}, detected={env_ports.get('pump_detected')})"
-            )
-            try:
-                pump = PumpController(port=pump_cfg["pump_port"], baudrate=pump_cfg.get("baudrate", 9600))
-            except Exception as e:  # pragma: no cover
-                print(f"Failed to initialize pump: {e}")
-                return 1
-            # Fail-fast if underlying serial handle missing
-            if getattr(pump, 'ser', None) is None:
-                print(
-                    "ERROR: Pump serial connection not established. "
-                    "Check wiring, drivers, or override with PUMP_PORT in .env."
-                )
-                return 1
-            # Allow device settle
-            time.sleep(0.3)
+            pump = Pump_win()
+            if not pump.initialize():
+                print(f"Pump_win initialization failed: {pump.get_error_details()}")
+                print(f"Suggested fix: {pump.get_suggested_fix()}")
+                print("Trying WSL pump controller...")
+                pump = Pump_wsl()
+                if not pump.initialize():
+                    print(f"Pump_wsl initialization failed: {pump.get_error_details()}")
+                    print(f"Suggested fix: {pump.get_suggested_fix()}")
+                    return 1
 
     valve = None
     if valve_enabled:
         if dry_run:
             valve = MockValve()
         else:
-            try:
-                print(
-                    f"[INFO] Valve port resolved: {env_ports['valve_port']} "
-                    f"(env={env_ports.get('valve_from_env')}, detected={env_ports.get('valve_detected')})"
-                )
-                valve = ValveController(env_ports["valve_port"], env_ports["valve_baud"])
-            except Exception as e:  # pragma: no cover
-                print(f"Failed to initialize valve: {e}")
+            valve = ValveController(port="COM5", baudrate=115200)
+            if getattr(valve, 'ser', None) is None:
+                print(f"Valve initialization failed: Serial connection not established.")
                 return 1
 
     try:

@@ -465,35 +465,43 @@ done 2>/dev/null || echo "no_port_found"'''
             return False
     
     def _test_wsl_communication(self) -> bool:
-        """Test if pump responds via WSL."""
+        """Test if pump responds via WSL, with robust timeout and diagnostics."""
         if self.distro is None or self.port is None:
             self.last_error = "WSL distribution or port not configured"
             return False
-            
+
         try:
+            print(f"[WSL DIAG] Testing pump communication on {self.port} in {self.distro}")
             # Use direct python invocation to avoid bash quoting issues and stabilize the line
             code = (
                 "import serial, time, sys\n"
+                "print('[WSL DIAG] Starting serial test...')\n"
                 f"port='{self.port}'\n"
                 f"baud={self.baudrate}\n"
                 "try:\n"
                 "    ser = serial.Serial(port, baud, timeout=2, xonxoff=True)\n"
+                "    print('[WSL DIAG] Serial port opened.')\n"
                 "    ser.reset_input_buffer(); ser.reset_output_buffer()\n"
                 "    try:\n"
                 "        ser.setDTR(False); time.sleep(0.05); ser.setDTR(True)\n"
                 "    except Exception:\n"
-                "        pass\n"
+                "        print('[WSL DIAG] DTR toggle failed.')\n"
                 "    time.sleep(0.1)\n"
                 "    ser.write(b'F100\\r'); ser.flush(); time.sleep(0.25)\n"
+                "    print('[WSL DIAG] Command sent.')\n"
                 "    ser.close(); print('success')\n"
                 "except Exception as e:\n"
-                "    print('error:', e); sys.exit(1)\n"
+                "    print('[WSL DIAG] Serial error:', e); sys.exit(1)\n"
             )
 
             result = subprocess.run(
                 ["wsl", "-d", self.distro, "-e", "python3", "-c", code],
-                capture_output=True, text=True, check=False, timeout=20
+                capture_output=True, text=True, check=False, timeout=10
             )
+
+            print(f"[WSL DIAG] Subprocess return code: {result.returncode}")
+            print(f"[WSL DIAG] stdout: {result.stdout!r}")
+            print(f"[WSL DIAG] stderr: {result.stderr!r}")
 
             ok = result.returncode == 0 and "success" in (result.stdout or "")
             if not ok:
@@ -502,9 +510,14 @@ done 2>/dev/null || echo "no_port_found"'''
                     f"stdout={result.stdout!r}, stderr={result.stderr!r}"
                 )
             return ok
-            
+
+        except subprocess.TimeoutExpired:
+            self.last_error = "WSL communication test timed out"
+            print("[WSL DIAG] Communication test timed out.")
+            return False
         except Exception as e:
             self.last_error = f"WSL communication test exception: {e}"
+            print(f"[WSL DIAG] Exception: {e}")
             return False
     
     def _run_wsl_command(self, python_code: str) -> bool:
