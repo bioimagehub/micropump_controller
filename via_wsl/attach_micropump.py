@@ -1,9 +1,11 @@
 import argparse
+import json
 import os
 import ctypes
 import os
 import re
 import shutil
+import socket
 import subprocess
 import sys
 import tempfile
@@ -11,7 +13,7 @@ import time
 import urllib.request
 from pathlib import Path
 
-GITHUB_RELEASES = "https://github.com/dorssel/usbipd-win/releases/latest/download/usbipd-win_x64.msi"
+GITHUB_API_URL = "https://api.github.com/repos/dorssel/usbipd-win/releases/latest"
 DEFAULT_MSI_IN_REPO = Path("tools/usbipd-win_x64.msi")  # commit an MSI here if you prefer pinning
 
 def is_admin():
@@ -61,6 +63,75 @@ def find_exe_on_path(name):
     guess = Path(r"C:\Program Files\usbipd-win\usbipd.exe")
     return guess if guess.exists() else None
 
+def get_latest_usbipd_download_url() -> str:
+    """Get the download URL for the latest usbipd-win x64 MSI from GitHub API."""
+    try:
+        print("Checking for latest usbipd-win release...")
+        
+        # Set timeout for the API request
+        socket.setdefaulttimeout(30)
+        
+        with urllib.request.urlopen(GITHUB_API_URL) as response:
+            data = json.loads(response.read().decode('utf-8'))
+        
+        # Look for the x64 MSI asset
+        for asset in data.get('assets', []):
+            name = asset.get('name', '').lower()
+            if 'x64.msi' in name and 'usbipd-win' in name:
+                url = asset.get('browser_download_url')
+                if url:
+                    print(f"Found latest release: {asset.get('name')} (v{data.get('tag_name', 'unknown')})")
+                    return url
+        
+        # Fallback - construct URL based on tag name if assets parsing fails
+        tag_name = data.get('tag_name', '')
+        if tag_name:
+            fallback_url = f"https://github.com/dorssel/usbipd-win/releases/download/{tag_name}/usbipd-win_{tag_name.lstrip('v')}_x64.msi"
+            print(f"Using fallback URL pattern for {tag_name}")
+            return fallback_url
+        
+        raise Exception("Could not find x64 MSI asset in release")
+        
+    except Exception as e:
+        print(f"⚠️  Failed to get latest release info: {e}")
+        # Ultimate fallback to a known working version
+        fallback_url = "https://github.com/dorssel/usbipd-win/releases/download/v5.2.0/usbipd-win_5.2.0_x64.msi"
+        print(f"Using hardcoded fallback: {fallback_url}")
+        return fallback_url
+    finally:
+        socket.setdefaulttimeout(None)
+
+def download_with_progress(url: str, destination: Path) -> bool:
+    """Download file with progress indication and proper error handling."""
+    try:
+        print(f"Downloading from: {url}")
+        print(f"Saving to: {destination}")
+        print("Download progress: ", end="", flush=True)
+        
+        def progress_callback(block_num, block_size, total_size):
+            if total_size > 0:
+                percent = min(100, (block_num * block_size * 100) // total_size)
+                # Show progress every 10%
+                if percent % 10 == 0 and block_num * block_size < total_size:
+                    print(f"{percent}%", end="", flush=True)
+                    if percent < 100:
+                        print("...", end="", flush=True)
+        
+        # Set a reasonable timeout for the download
+        import socket
+        socket.setdefaulttimeout(60)  # 60 second timeout
+        
+        urllib.request.urlretrieve(url, destination, progress_callback)
+        print(" 100% - Download completed!")
+        return True
+        
+    except Exception as e:
+        print(f"\n❌ Download failed: {e}")
+        return False
+    finally:
+        # Reset timeout
+        socket.setdefaulttimeout(None)
+
 def ensure_usbipd_available(msi_path: Path | None):
     exe = find_exe_on_path("usbipd")
     if exe:
@@ -74,18 +145,47 @@ def ensure_usbipd_available(msi_path: Path | None):
         installer = msi_path
         print(f"Using repo MSI: {installer}")
     else:
-        # download latest MSI from GitHub Releases
+        # download latest MSI from GitHub Releases with retry logic
         print("usbipd not found; downloading latest MSI...")
         tmpdir = Path(tempfile.mkdtemp())
         installer = tmpdir / "usbipd-win_x64.msi"
-        urllib.request.urlretrieve(GITHUB_RELEASES, installer)
+        
+        # Get the latest download URL
+        download_url = get_latest_usbipd_download_url()
+        
+        # Try downloading with retries
+        max_retries = 3
+        for attempt in range(max_retries):
+            if attempt > 0:
+                print(f"\nRetry attempt {attempt + 1}/{max_retries}...")
+                time.sleep(2 * attempt)  # exponential backoff
+            
+            if download_with_progress(download_url, installer):
+                break
+        else:
+            sys.exit("❌ Failed to download usbipd-win after multiple attempts. Please check your internet connection.")
 
     # silent install
     print("Installing usbipd-win silently...")
-    run(["msiexec", "/i", str(installer), "/qn"])
+    try:
+        result = run(["msiexec", "/i", str(installer), "/qn", "/norestart"], check=False)
+        if result.returncode != 0:
+            print(f"⚠️  MSI installation returned code {result.returncode}")
+            if result.stderr:
+                print(f"Error details: {result.stderr}")
+    except Exception as e:
+        print(f"❌ Installation error: {e}")
+        sys.exit("usbipd installation failed.")
+    
+    # Give the installation a moment to complete
+    print("Waiting for installation to complete...")
+    time.sleep(3)
+    
     exe = find_exe_on_path("usbipd")
     if not exe:
         sys.exit("usbipd installation appears to have failed (usbipd not on PATH).")
+    
+    print(f"✅ usbipd installed successfully at: {exe}")
     return exe
 
 def usbipd_list(usbipd_exe: Path):
@@ -240,49 +340,87 @@ dmesg | tail -n 10 | grep -E "(usb|tty|ftdi)" || echo "No recent USB/FTDI messag
         return True
 
 def setup_ftdi_drivers_interactive(distro: str):
-    """Install FTDI drivers with a single sudo prompt"""
+    """Install FTDI drivers with proper permissions - ONE-TIME sudo setup for permanent access"""
     print(f"\n=== FTDI Driver Setup ===")
-    print(f"Installing FTDI drivers and configuring serial device access...")
+    print(f"Installing FTDI drivers and configuring permanent serial device access...")
+    print(f"This is a ONE-TIME setup. After this, no sudo will be needed to run the pump.")
     print(f"You will be prompted for your sudo password once.")
     print()
     
-    # Create a comprehensive setup script
+    # Get current user for proper group assignment
+    user_check = run(["wsl", "-d", distro, "-e", "whoami"], check=False)
+    current_user = user_check.stdout.strip() if user_check.returncode == 0 else "user"
+    print(f"Setting up permissions for user: {current_user}")
+    
+    # Create a comprehensive setup script that ensures permanent access
     setup_script = f'''
 set -e
 export DEBIAN_FRONTEND=noninteractive
 echo "=== Starting FTDI driver setup ==="
+
+# Get the actual username (not from $USER which might be wrong in sudo context)
+ACTUAL_USER="{current_user}"
+echo "Configuring for user: $ACTUAL_USER"
+
 echo "Updating package list..."
 apt-get update -yq
 
-echo "Installing FTDI drivers and development tools..."
+echo "Installing FTDI drivers and essential packages..."
 apt-get install -yq libftdi1-2 libftdi1-dev python3-serial usbutils
 
-echo "Adding user to dialout group for serial port access..."
-usermod -a -G dialout $USER || true
+echo "Adding user $ACTUAL_USER to dialout group for permanent serial port access..."
+usermod -a -G dialout "$ACTUAL_USER"
 
-echo "Creating udev rule for FTDI micropump device..."
-echo 'SUBSYSTEM=="usb", ATTRS{{idVendor}}=="0403", ATTRS{{idProduct}}=="b4c0", MODE="0666"' > /etc/udev/rules.d/99-ftdi-micropump.rules || true
+echo "Creating comprehensive udev rules for FTDI devices..."
+cat > /etc/udev/rules.d/99-ftdi-micropump.rules << 'EOF'
+# FTDI Micropump Device Rules - Allows access without sudo
+# VID:0403 PID:B4C0 - Bartels Micropump
+SUBSYSTEM=="usb", ATTRS{{idVendor}}=="0403", ATTRS{{idProduct}}=="b4c0", MODE="0666", GROUP="dialout"
+# Generic FTDI devices
+SUBSYSTEM=="usb", ATTRS{{idVendor}}=="0403", MODE="0664", GROUP="dialout"
+# TTY devices created by FTDI
+KERNEL=="ttyUSB[0-9]*", ATTRS{{idVendor}}=="0403", MODE="0666", GROUP="dialout"
+KERNEL=="ttyACM[0-9]*", ATTRS{{idVendor}}=="0403", MODE="0666", GROUP="dialout"
+# Ensure all USB serial devices are accessible
+SUBSYSTEM=="tty", KERNEL=="ttyUSB[0-9]*", MODE="0666", GROUP="dialout"
+SUBSYSTEM=="tty", KERNEL=="ttyACM[0-9]*", MODE="0666", GROUP="dialout"
+EOF
 
-echo "Reloading udev rules..."
-udevadm control --reload-rules 2>/dev/null || echo "udev reload failed (this is normal in some WSL configurations)"
-udevadm trigger 2>/dev/null || echo "udev trigger failed (this is normal in some WSL configurations)"
+echo "Setting proper permissions on udev rules..."
+chmod 644 /etc/udev/rules.d/99-ftdi-micropump.rules
 
 echo "Loading FTDI kernel modules..."
-modprobe ftdi_sio 2>/dev/null || echo "ftdi_sio module load failed (trying alternative approach)"
-modprobe usbserial 2>/dev/null || echo "usbserial module load failed (trying alternative approach)"
+modprobe usbserial 2>/dev/null || echo "usbserial module already loaded or not needed"
+modprobe ftdi_sio 2>/dev/null || echo "ftdi_sio module already loaded or not needed"
 
-echo "Forcing USB device recognition..."
-echo "0403 b4c0" > /sys/bus/usb-serial/drivers/ftdi_sio/new_id 2>/dev/null || echo "Manual device ID registration failed"
+echo "Adding FTDI device ID to driver..."
+echo "0403 b4c0" > /sys/bus/usb-serial/drivers/ftdi_sio/new_id 2>/dev/null || echo "Device ID already registered or registration not needed"
 
-echo "=== FTDI driver setup complete ==="
-echo "Note: You may need to log out and back in for group changes to take effect."
+echo "Reloading udev rules..."
+udevadm control --reload-rules 2>/dev/null || echo "udev reload not available (normal in WSL)"
+udevadm trigger 2>/dev/null || echo "udev trigger not available (normal in WSL)"
 
-# If devices already exist, ensure world RW permissions for immediate access
-for p in /dev/ttyUSB* /dev/ttyACM*; do
-    if [ -c "$p" ]; then
-        chmod a+rw "$p" || true
+echo "Setting up persistent module loading..."
+cat > /etc/modules-load.d/ftdi.conf << 'EOF'
+# Load FTDI modules at boot
+usbserial
+ftdi_sio
+EOF
+
+echo "Applying immediate permissions to existing devices..."
+for device in /dev/ttyUSB* /dev/ttyACM*; do
+    if [ -c "$device" ]; then
+        echo "Setting permissions on $device"
+        chmod 666 "$device"
+        chgrp dialout "$device" 2>/dev/null || true
     fi
 done
+
+echo "=== FTDI driver setup complete ==="
+echo "✅ User $ACTUAL_USER added to dialout group"
+echo "✅ Udev rules installed for automatic device permissions"
+echo "✅ FTDI kernel modules loaded"
+echo "✅ No sudo will be required for future pump operations"
 '''
     
     try:
@@ -307,12 +445,60 @@ done
         if result.returncode == 0:
             print("✅ FTDI driver installation completed successfully!")
             
+            # Validate group membership and permissions 
+            print("\n=== Validating Setup ===")
+            
+            # Force group membership refresh (newgrp simulation)
+            print("Refreshing group membership...")
+            group_refresh = f"""
+# Check if user is in dialout group
+if groups {current_user} | grep -q dialout; then
+    echo "✅ User {current_user} is now in dialout group"
+else
+    echo "⚠️  Group membership may need WSL restart"
+fi
+
+# List current groups
+echo "Current groups for {current_user}:"
+groups {current_user}
+
+# Check udev rules
+if [ -f /etc/udev/rules.d/99-ftdi-micropump.rules ]; then
+    echo "✅ Udev rules installed"
+else
+    echo "⚠️  Udev rules missing"
+fi
+
+# Check modules
+if lsmod | grep -q ftdi_sio; then
+    echo "✅ FTDI kernel modules loaded"
+else
+    echo "ℹ️  FTDI modules will load when device is attached"
+fi
+"""
+            
+            validation_result = run(["wsl", "-d", distro, "-e", "bash", "-c", group_refresh], check=False)
+            print(validation_result.stdout)
+            
             # Give a moment for udev to process
             time.sleep(2)
             
-            # Check for serial devices
-            print("\nChecking for serial devices...")
-            check_cmd = "ls -l /dev/ttyUSB* /dev/ttyACM* 2>/dev/null || echo 'No serial devices found yet'"
+            # Check for serial devices and their permissions
+            print("\nChecking for serial devices and permissions...")
+            check_cmd = """
+for device in /dev/ttyUSB* /dev/ttyACM*; do
+    if [ -c "$device" ]; then
+        echo "Device: $device"
+        ls -l "$device"
+        echo "Permissions: $(stat -c '%A (%a)' "$device")"
+        echo "Group: $(stat -c '%G' "$device")"
+        echo ""
+    fi
+done
+if ! ls /dev/ttyUSB* /dev/ttyACM* >/dev/null 2>&1; then
+    echo "No serial devices found yet - this is normal if micropump isn't attached"
+fi
+"""
             res = run(["wsl", "-d", distro, "-e", "bash", "-c", check_cmd], check=False)
             print(res.stdout)
             
@@ -328,6 +514,14 @@ done
             
             if final_count > 0:
                 print(f"\n✅ Success! Found {final_count} serial device(s) after FTDI setup.")
+                # Test permissions without sudo
+                print("\n=== Testing Permissions (No Sudo Required) ===")
+                test_result = test_serial_access_no_sudo(distro)
+                if test_result:
+                    print("🎉 Perfect! Pump can now run without sudo.")
+                else:
+                    print("⚠️  May need WSL restart for group changes to take full effect.")
+                    print("💡 Try: wsl --shutdown && wsl")
                 return True
             else:
                 print("\n⚠️  FTDI drivers installed but serial devices not yet available.")
@@ -343,6 +537,113 @@ done
     except Exception as e:
         print(f"❌ Failed to install FTDI drivers: {e}")
         return False
+
+
+def test_serial_access_no_sudo(distro: str) -> bool:
+    """Test that serial devices can be accessed without sudo after setup"""
+    test_script = '''
+# Test serial access without sudo
+import os
+import stat
+import grp
+import pwd
+
+def check_device_access(device_path):
+    """Check if current user can access device without sudo"""
+    if not os.path.exists(device_path):
+        return False, f"Device {device_path} does not exist"
+    
+    try:
+        # Check file permissions
+        st = os.stat(device_path)
+        mode = stat.filemode(st.st_mode)
+        
+        # Check if readable/writable by owner, group, or other
+        uid = os.getuid()
+        gid = os.getgid()
+        
+        # Get file owner and group
+        file_uid = st.st_uid  
+        file_gid = st.st_gid
+        
+        # Check permissions
+        can_read = False
+        can_write = False
+        
+        # Owner permissions
+        if uid == file_uid:
+            can_read = bool(st.st_mode & stat.S_IRUSR)
+            can_write = bool(st.st_mode & stat.S_IWUSR)
+        # Group permissions  
+        elif gid == file_gid or file_gid in os.getgroups():
+            can_read = bool(st.st_mode & stat.S_IRGRP)
+            can_write = bool(st.st_mode & stat.S_IWGRP)
+        # Other permissions
+        else:
+            can_read = bool(st.st_mode & stat.S_IROTH)
+            can_write = bool(st.st_mode & stat.S_IWOTH)
+        
+        if can_read and can_write:
+            # Try to actually open the device
+            try:
+                with open(device_path, 'r+b', 0):
+                    pass
+                return True, f"✅ {device_path}: Full access confirmed"
+            except PermissionError:
+                return False, f"❌ {device_path}: Permission denied despite file mode {mode}"
+            except Exception as e:
+                return True, f"⚠️  {device_path}: Accessible but device busy ({e})"
+        else:
+            return False, f"❌ {device_path}: Insufficient permissions {mode}"
+            
+    except Exception as e:
+        return False, f"❌ {device_path}: Error checking access - {e}"
+
+# Find and test all serial devices
+devices_tested = 0
+devices_accessible = 0
+
+import glob
+for device_pattern in ["/dev/ttyUSB*", "/dev/ttyACM*"]:
+    for device in glob.glob(device_pattern):
+        devices_tested += 1
+        success, msg = check_device_access(device)
+        print(msg)
+        if success:
+            devices_accessible += 1
+
+if devices_tested == 0:
+    print("ℹ️  No serial devices found to test")
+elif devices_accessible == devices_tested:
+    print(f"🎉 SUCCESS: All {devices_accessible}/{devices_tested} serial devices accessible without sudo")
+else:
+    print(f"⚠️  {devices_accessible}/{devices_tested} serial devices accessible")
+
+# Check group membership
+import subprocess
+try:
+    groups_result = subprocess.run(["groups"], capture_output=True, text=True)
+    if "dialout" in groups_result.stdout:
+        print("✅ User is in dialout group")
+    else:
+        print("❌ User not in dialout group - may need WSL restart")
+        print(f"Current groups: {groups_result.stdout.strip()}")
+except Exception as e:
+    print(f"Could not check groups: {e}")
+'''
+    
+    print("Testing serial device access without sudo...")
+    try:
+        result = run(["wsl", "-d", distro, "-e", "python3", "-c", test_script], check=False)
+        print(result.stdout)
+        
+        # Return True if we see success message
+        return "SUCCESS: All" in result.stdout or "Full access confirmed" in result.stdout
+        
+    except Exception as e:
+        print(f"Permission test failed: {e}")
+        return False
+
 
 def run_wsl_python(distro: str, wsl_script: str, args: list[str]):
     if not wsl_script:

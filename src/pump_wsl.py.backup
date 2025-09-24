@@ -21,7 +21,9 @@ class Pump_wsl:
         self._available_ports: List[str] = []
         
         # Load VID/PID from .env file for consistent device identification
-        self.vid: Optional[int] = None
+                    print(f"⚠️  USB attachment completed with exit code: {result.returncode}")
+                print("💡 If you saw error messages in the admin window, please note them for troubleshooting.")
+                # Even non-zero exit codes might have partially worked, so we still try to continue self.vid: Optional[int] = None
         self.pid: Optional[int] = None
         self._load_device_ids_from_env()
        
@@ -92,18 +94,33 @@ class Pump_wsl:
             if self.port is None:
                 self.port = self._find_wsl_pump_port()
                 if self.port is None:
-                    # Try auto-fix by attaching USB device
-                    print("🔧 No serial ports found. Attempting automatic USB device attachment...")
-                    if self._auto_fix_usb_attachment():
-                        print("🔄 Retrying after USB attachment...")
-                        time.sleep(2)  # Give devices time to appear
+                    # Check if device is already attached but maybe we need to wait
+                    if self._is_usb_device_attached_to_wsl():
+                        print("🔄 USB device detected in WSL, waiting for serial port to become available...")
+                        time.sleep(2)
                         self.port = self._find_wsl_pump_port()
-                        if self.port is None:
-                            self.last_error = "No serial ports found in WSL even after USB attachment"
+                        
+                    if self.port is None:
+                        # Check if we've already done attachment before (avoid repeated admin prompts)
+                        if self._is_attachment_completed():
+                            print("⚠️  USB attachment was completed previously, but no serial ports found.")
+                            print("💡 The device might need to be reconnected or the WSL distro restarted.")
+                            self.last_error = "USB device previously attached but no serial ports found"
                             return False
-                    else:
-                        self.last_error = "No serial ports found in WSL and auto-fix failed"
-                        return False
+                        
+                        # Try auto-fix by attaching USB device (first time only)
+                        print("🔧 No serial ports found. Attempting automatic USB device attachment...")
+                        if self._auto_fix_usb_attachment():
+                            self._mark_attachment_completed()
+                            print("🔄 Retrying after USB attachment...")
+                            time.sleep(3)  # Give devices more time to appear
+                            self.port = self._find_wsl_pump_port()
+                            if self.port is None:
+                                self.last_error = "No serial ports found in WSL even after USB attachment"
+                                return False
+                        else:
+                            self.last_error = "No serial ports found in WSL and auto-fix failed"
+                            return False
             
             # Step 4: Test if pump responds
             if self._test_wsl_communication():
@@ -171,7 +188,7 @@ class Pump_wsl:
             for i, distro in enumerate(available_distros, 1):
                 print(f"   {i}. {distro}")
             
-            print("\n� Please select a WSL distribution:")
+            print("\n🔧 Please select a WSL distribution:")
             print("   Enter the number (1, 2, etc.) of your preferred distribution")
             print("   Or press Enter to auto-select Ubuntu if available")
             
@@ -360,72 +377,32 @@ WSL_DISTRO={distro}
             return False
     
     def _check_wsl_distro(self) -> bool:
-        """Check if the specified WSL distribution is available and running."""
+        """Check if the specified WSL distribution is available."""
         if self.distro is None:
             return False
             
         try:
-            # Check if distro exists and get its state
             result = subprocess.run([
-                "wsl", "-l", "-v"
-            ], capture_output=True, text=True, check=False, timeout=10)
+                "wsl", "-l", "-q"
+            ], capture_output=True, text=True, check=False, timeout=5)
             
             if result.returncode != 0:
                 self.last_error = "WSL not available or not working"
                 return False
             
-            # Parse the output to check distro state
-            lines = result.stdout.replace('\x00', '').strip().split('\n')
-            distro_found = False
-            distro_running = False
-            
-            for line in lines:
-                if self.distro.lower() in line.lower():
-                    distro_found = True
-                    if 'running' in line.lower():
-                        distro_running = True
-                    elif 'stopped' in line.lower():
-                        print(f"⚠️  WSL distro '{self.distro}' is stopped - this will reset USB attachments")
-                        print("💡 Starting WSL distribution...")
-                        # Start the distro
-                        start_result = subprocess.run([
-                            "wsl", "-d", self.distro, "-e", "echo", "WSL started"
-                        ], capture_output=True, text=True, check=False, timeout=15)
-                        
-                        if start_result.returncode == 0:
-                            print(f"✅ WSL distro '{self.distro}' started successfully")
-                            distro_running = True
-                        else:
-                            print(f"❌ Failed to start WSL distro '{self.distro}'")
-                    break
-            
-            if not distro_found:
-                # Fallback to simple name check
-                simple_result = subprocess.run([
-                    "wsl", "-l", "-q"
-                ], capture_output=True, text=True, check=False, timeout=5)
-                
-                if simple_result.returncode == 0:
-                    raw = (simple_result.stdout or "").replace('\x00', '').strip()
-                    available_distros = [line.strip().replace('*', '') for line in raw.split('\n') if line.strip()]
-                    norm_available = [d.strip().lower() for d in available_distros]
-                    target = self.distro.strip().lower()
+            # Sanitize and normalize distro names
+            raw = (result.stdout or "").replace('\x00', '').strip()
+            available_distros = [line.strip().replace('*', '') for line in raw.split('\n') if line.strip()]
+            norm_available = [d.strip().lower() for d in available_distros]
+            target = self.distro.strip().lower()
 
-                    # Accept exact match or prefix match
-                    found = target in norm_available or any(a.startswith(target) for a in norm_available)
+            # Accept exact match or prefix match (Ubuntu vs Ubuntu-22.04)
+            found = target in norm_available or any(a.startswith(target) for a in norm_available)
 
-                    if not found:
-                        self.last_error = f"WSL distribution '{self.distro}' not found. Available: {available_distros}"
-                        return False
-                    
-                    distro_found = True
-                    # Assume it's running if we can't get detailed state
-                    distro_running = True
-            
-            if not distro_found:
-                self.last_error = f"WSL distribution '{self.distro}' not found"
+            if not found:
+                self.last_error = f"WSL distribution '{self.distro}' not found. Available: {available_distros}"
                 return False
-                
+            
             return True
             
         except subprocess.TimeoutExpired:
@@ -470,6 +447,111 @@ WSL_DISTRO={distro}
         except Exception as e:
             self.last_error = f"Error finding WSL ports: {e}"
             return None
+
+    def _is_usb_device_attached_to_wsl(self) -> bool:
+        """Check if USB device is already attached and accessible in WSL."""
+        if self.distro is None:
+            return False
+            
+        try:
+            # Check if we can find the device via VID/PID in WSL
+            if self.vid is not None and self.pid is not None:
+                vid_hex = f"{self.vid:04x}"
+                pid_hex = f"{self.pid:04x}"
+                
+                # Use lsusb to check if device is visible in WSL
+                lsusb_cmd = f"lsusb | grep -i '{vid_hex}:{pid_hex}' || echo 'not_found'"
+                
+                result = subprocess.run([
+                    "wsl", "-d", self.distro, "-e", "bash", "-c", lsusb_cmd
+                ], capture_output=True, text=True, check=False, timeout=10)
+                
+                if result.returncode == 0 and "not_found" not in result.stdout:
+                    # Device is visible in lsusb, check if it has a serial port
+                    port_check = "ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null | head -1 || echo 'no_ports'"
+                    port_result = subprocess.run([
+                        "wsl", "-d", self.distro, "-e", "bash", "-c", port_check
+                    ], capture_output=True, text=True, check=False, timeout=10)
+                    
+                    if port_result.returncode == 0 and "no_ports" not in port_result.stdout:
+                        return True
+            
+            return False
+            
+        except Exception as e:
+            logging.warning(f"Failed to check USB device attachment status: {e}")
+            return False
+
+    def _get_attachment_state_file(self) -> Path:
+        """Get path to the USB attachment state file."""
+        project_root = Path(__file__).parent.parent
+        return project_root / ".wsl_usb_attached"
+
+    def _is_attachment_completed(self) -> bool:
+        """Check if USB attachment has been completed successfully before."""
+        try:
+            state_file = self._get_attachment_state_file()
+            if state_file.exists():
+                # Check if the state file is recent (within last 24 hours)
+                import time
+                file_age = time.time() - state_file.stat().st_mtime
+                if file_age < 86400:  # 24 hours
+                    return True
+                else:
+                    # Remove old state file
+                    state_file.unlink()
+            return False
+        except Exception:
+            return False
+
+    def _mark_attachment_completed(self) -> None:
+        """Mark that USB attachment has been completed successfully."""
+        try:
+            state_file = self._get_attachment_state_file()
+            import time
+            state_file.write_text(f"USB attachment completed at {time.time()}\nDistro: {self.distro}\nVID:PID: {self.vid:04x}:{self.pid:04x}")
+        except Exception as e:
+            logging.warning(f"Failed to create USB attachment state file: {e}")
+
+    def _check_usbipd_available(self) -> bool:
+        """Check if usbipd is available on the system."""
+        try:
+            result = subprocess.run(["usbipd", "--version"], 
+                                  capture_output=True, text=True, 
+                                  check=False, timeout=10)
+            if result.returncode == 0:
+                print(f"✅ usbipd is available: {result.stdout.strip()}")
+                return True
+            else:
+                print("⚠️  usbipd command failed")
+                return False
+        except FileNotFoundError:
+            print("⚠️  usbipd not found - will be installed automatically")
+            return False
+        except Exception as e:
+            print(f"⚠️  Error checking usbipd: {e}")
+            return False
+
+    def reset_attachment_state(self) -> bool:
+        """Reset USB attachment state to force re-attachment on next initialization.
+        
+        Useful for troubleshooting or when the USB device has been changed.
+        
+        Returns:
+            True if state was reset successfully, False otherwise.
+        """
+        try:
+            state_file = self._get_attachment_state_file()
+            if state_file.exists():
+                state_file.unlink()
+                print("✅ USB attachment state reset - next initialization will attempt device attachment")
+                return True
+            else:
+                print("ℹ️  No USB attachment state to reset")
+                return True
+        except Exception as e:
+            print(f"⚠️  Failed to reset USB attachment state: {e}")
+            return False
     
     def _find_wsl_port_by_vid_pid(self) -> Optional[str]:
         """Find WSL serial port using VID/PID detection via lsusb and device mapping."""
@@ -587,7 +669,11 @@ done 2>/dev/null || echo "no_port_found"'''
                 print(f"❌ Attach script not found: {attach_script}")
                 return False
             
+            # Check if usbipd is available (informational only - the script will install it if needed)
+            self._check_usbipd_available()
+            
             print("🔒 Running USB attachment as admin (you may see a UAC prompt)...")
+            print("   Note: This will automatically install usbipd-win if not present")
             print("   Note: If FTDI support needs installing in WSL, you may be prompted for your sudo password once.")
             
             # Run attach_micropump.py via the admin batch file with current distro
@@ -616,20 +702,25 @@ done 2>/dev/null || echo "no_port_found"'''
             if auto_ftdi_env in ("1", "true", "yes", "on"):  # default on
                 cmd.append("--auto-ftdi")
 
+            print(f"Running: python {' '.join(cmd[1:])}")
+
+            # Run without capture_output so user can see the admin window
+            # The batch file will handle showing errors and pausing
             result = subprocess.run(
                 cmd,
                 cwd=admin_batch.parent,
                 env=env,
                 check=False,
-                timeout=180,
-            )  # allow 3 minutes
+                timeout=300,  # Increased timeout to account for user reading errors
+            )  # allow 5 minutes
             
             if result.returncode == 0:
                 print("✅ USB attachment completed successfully")
                 return True
             else:
                 print(f"⚠️  USB attachment completed with exit code: {result.returncode}")
-                # Even non-zero exit codes might have partially worked
+                print("� If you saw error messages in the admin window, please note them for troubleshooting.")
+                # Even non-zero exit codes might have partially worked, so we still try to continue
                 return True
                 
         except subprocess.TimeoutExpired:
@@ -737,6 +828,8 @@ done 2>/dev/null || echo "no_port_found"'''
             return "Install WSL: Open PowerShell as Admin → Run 'wsl --install' → Restart computer"
         elif "not found" in self.last_error or "Microsoft Store" in self.last_error:
             return "Install WSL distribution: Open Microsoft Store → Search 'Debian' or 'Ubuntu' → Install → Run once to setup"
+        elif "previously attached but no serial ports found" in self.last_error:
+            return "Try: 1) Reconnect USB device physically, 2) Restart WSL: 'wsl --shutdown', 3) Re-run attachment script manually"
         elif "No serial ports" in self.last_error:
             return "USB device auto-attachment attempted. Check if pump is connected and powered"
         elif "not responding" in self.last_error:
@@ -757,9 +850,11 @@ done 2>/dev/null || echo "no_port_found"'''
             self.last_error = f"Invalid frequency: {freq} (must be 1-300)"
             return False
         
-        python_code = f'''ser.write(b'F{freq}\\r')
-    ser.flush()
-    time.sleep(0.15)'''
+        python_code = f'''
+ser.write(b'F{freq}\\r')
+ser.flush()
+time.sleep(0.15)
+'''
         return self._run_wsl_command(python_code)
     
     def set_voltage(self, voltage: int) -> bool:
@@ -768,9 +863,11 @@ done 2>/dev/null || echo "no_port_found"'''
             self.last_error = f"Invalid voltage: {voltage} (must be 1-250)"
             return False
         
-        python_code = f'''ser.write(b'A{voltage}\\r')
-    ser.flush()
-    time.sleep(0.15)'''
+        python_code = f'''
+ser.write(b'A{voltage}\\r')
+ser.flush()
+time.sleep(0.15)
+'''
         return self._run_wsl_command(python_code)
     
     def set_waveform(self, waveform: str) -> bool:
@@ -783,15 +880,19 @@ done 2>/dev/null || echo "no_port_found"'''
         }
         cmd = waveform_map.get(waveform.upper(), waveform.upper())
         
-        python_code = f'''ser.write(b'{cmd}\\r')
-    ser.flush()
-    time.sleep(0.15)'''
+        python_code = f'''
+ser.write(b'{cmd}\\r')
+ser.flush()
+time.sleep(0.15)
+'''
         return self._run_wsl_command(python_code)
     
     def start(self) -> bool:
         """Start the pump."""
-        python_code = '''ser.write(b'bon\\r')
-    ser.flush()'''
+        python_code = '''
+ser.write(b'bon\\r')
+ser.flush()
+'''
         result = self._run_wsl_command(python_code)
         if result:
             logging.info("WSL pump started")
@@ -799,8 +900,10 @@ done 2>/dev/null || echo "no_port_found"'''
     
     def stop(self) -> bool:
         """Stop the pump."""
-        python_code = '''ser.write(b'boff\\r')
-    ser.flush()'''
+        python_code = '''
+ser.write(b'boff\\r')
+ser.flush()
+'''
         result = self._run_wsl_command(python_code)
         if result:
             logging.info("WSL pump stopped")
@@ -808,11 +911,13 @@ done 2>/dev/null || echo "no_port_found"'''
     
     def pulse(self, duration: float) -> bool:
         """Run pump for specified duration then stop."""
-        python_code = f'''ser.write(b'bon\\r')
-    ser.flush()
-    time.sleep({duration})
-    ser.write(b'boff\\r')
-    ser.flush()'''
+        python_code = f'''
+ser.write(b'bon\\r')
+ser.flush()
+time.sleep({duration})
+ser.write(b'boff\\r')
+ser.flush()
+'''
         return self._run_wsl_command(python_code)
     
     def test_signal(self, duration: float = 1.0, frequency: int = 100, voltage: int = 100, waveform: str = "RECT") -> bool:

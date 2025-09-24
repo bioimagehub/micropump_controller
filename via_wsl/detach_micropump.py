@@ -353,7 +353,7 @@ def cleanup_windows_drivers(dry_run=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Detach micropump and uninstall all related components from both WSL and Windows.")
-    parser.add_argument("--distro", default="Ubuntu", help="WSL distro name to clean up (default: Ubuntu)")
+    parser.add_argument("--distro", default="Debian", help="WSL distro name to clean up (default: Debian)")
     parser.add_argument("--keep-usbipd", action="store_true", help="Keep usbipd-win installed (only detach devices)")
     parser.add_argument("--wsl-only", action="store_true", help="Only clean up WSL environment, don't touch Windows")
     parser.add_argument("--windows-only", action="store_true", help="Only clean up Windows, don't touch WSL")
@@ -382,10 +382,10 @@ def main():
                 print("  - Uninstall usbipd-win from Windows")
             print("  - Clean up Windows drivers")
         
-        response = input("\nDo you want to continue? (y/N): ")
-        if response.lower() not in ['y', 'yes']:
-            print("Operation cancelled.")
-            return
+        # response = input("\nDo you want to continue? (y/N): ")
+        # if response.lower() not in ['y', 'yes']:
+        #     print("Operation cancelled.")
+        #     return
     
     success = True
     

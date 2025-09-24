@@ -32,4 +32,21 @@ python %*
 REM Show results and pause so user can see output
 echo.
 echo Script execution completed.
-pause
+echo Exit Code: %ERRORLEVEL%
+if %ERRORLEVEL% NEQ 0 (
+    echo.
+    echo *** ERROR DETECTED ***
+    echo The script exited with error code: %ERRORLEVEL%
+    echo Please review the output above for error details.
+    echo.
+) else (
+    echo.
+    echo *** SUCCESS ***
+    echo Script completed successfully.
+    echo.
+)
+echo Press any key to continue...
+pause >nul
+echo.
+echo Window will close in 10 seconds...
+timeout /t 10 /nobreak >nul 2>&1
