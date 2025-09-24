@@ -46,5 +46,5 @@ if %ERRORLEVEL% NEQ 0 (
     echo.
 )
 
-echo Window will close in 10 seconds...
-timeout /t 10 /nobreak >nul 2>&1
+echo Window will close in 2 seconds...
+timeout /t 2 /nobreak >nul 2>&1
