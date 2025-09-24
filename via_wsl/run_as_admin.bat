@@ -45,8 +45,6 @@ if %ERRORLEVEL% NEQ 0 (
     echo Script completed successfully.
     echo.
 )
-echo Press any key to continue...
-pause >nul
-echo.
+
 echo Window will close in 10 seconds...
 timeout /t 10 /nobreak >nul 2>&1
