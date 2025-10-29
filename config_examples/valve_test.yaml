@@ -1,0 +1,32 @@
+######################################################################
+# Valve test example
+#
+# This minimal configuration tests the valve by pulsing it on and off
+# a few times to verify communication and hardware functionality.
+#
+# Run (real hardware):
+#   uv run python cli.py config_examples/valve_test.yaml
+# Run (dry-run simulation):
+#   uv run python cli.py --dry-run config_examples/valve_test.yaml
+######################################################################
+
+pump settings:
+  # No pump settings needed for valve-only test
+
+required hardware:
+  pump: false
+  valve: true
+  pipetting robot: false
+  microscope: false
+
+run:
+  # Pulse the valve 5 times with 2 second on, 1 second off
+  - loop:
+      repeat: 5
+      steps:
+        - valve_on: 2
+        - valve_off: 0
+        - wait: 1
+
+  # Final wait to observe last pulse
+  - wait: 2

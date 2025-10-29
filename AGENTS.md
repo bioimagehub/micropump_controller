@@ -42,36 +42,35 @@ WSL support enables cross-platform deployment without VM overhead:
 Use YAML configs in `config_examples/` for complex sequences:
 ```bash
 # Test with mock devices
-python cli.py --dry-run config_examples/pump_on_10s.yaml
+uv run python cli.py --dry-run config_examples/pump_on_10s.yaml
 
 # Real hardware with port auto-detection  
-python cli.py config_examples/continuous_switching.yaml
+uv run python cli.py config_examples/continuous_switching.yaml
 
 # Force manual port configuration
-PUMP_PORT=COM3 python cli.py config_examples/pump_on_10s.yaml
+PUMP_PORT=COM3 uv run python cli.py config_examples/pump_on_10s.yaml
 ```
 
 ### Environment Setup Commands
 ```bash
-# Install environment
-conda env create -f environment.yml
-conda activate pump-ctrl
+# Install environment with UV
+uv sync
 
 # Test hardware connection
-python -c "from src.resolve_ports import list_all_ports; print(list_all_ports())"
+uv run python -c "from src.resolve_ports import list_all_ports; print(list_all_ports())"
 
 # Verify device detection
-python -c "from src.resolve_ports import get_port_by_id; print(get_port_by_id('pump'))"
+uv run python -c "from src.resolve_ports import get_port_by_id; print(get_port_by_id('pump'))"
 ```
 
 ### Audio Monitoring Integration
 Use `src/audio/monitor.py` for debugging pump operations:
 ```bash
 # Monitor any command execution
-python src/audio/monitor.py "python cli.py config_examples/pump_on_10s.yaml"
+uv run python src/audio/monitor.py "uv run python cli.py config_examples/pump_on_10s.yaml"
 
 # Test device discovery
-python src/audio/discovery.py
+uv run python src/audio/discovery.py
 ```
 
 ### WSL Setup Workflow
@@ -81,7 +80,7 @@ For cross-platform development, use the automated WSL setup:
 via_wsl/run_as_admin.bat attach_micropump.py --distro Ubuntu
 
 # Test WSL pump controller
-python -c "from src.pump_wsl import Pump_wsl; p = Pump_wsl(); p.initialize()"
+uv run python -c "from src.pump_wsl import Pump_wsl; p = Pump_wsl(); p.initialize()"
 ```
 
 ### Important WSL Patterns

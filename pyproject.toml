@@ -1,0 +1,30 @@
+[project]
+name = "micropump-controller"
+version = "0.1.0"
+description = "Hardware control system for Bartels micropumps and Arduino-based solenoid valves"
+requires-python = ">=3.12"
+dependencies = [
+    "pyserial>=3.5",
+    "numpy>=1.24.0",
+    "python-dotenv>=1.0.0",
+    "pyyaml>=6.0",
+    "usbx>=0.2.0",
+    "pyusb>=1.2.0",
+    "sounddevice>=0.4.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = []
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]

@@ -214,7 +214,7 @@ def apply_pump_profile(pump, name: str, profiles: Dict[str, Any], *, start: bool
         )
     # Always stop first to avoid abrupt changes while running
     try:
-        pump.bartels_stop()
+        pump.stop()
     except Exception:
         pass  # ignore if already stopped
     # Order important for hardware safety
@@ -222,16 +222,16 @@ def apply_pump_profile(pump, name: str, profiles: Dict[str, Any], *, start: bool
     voltage = profile.get("voltage")
     freq = profile.get("freq")
     if waveform is not None:
-        pump.bartels_set_waveform(waveform)
+        pump.set_waveform(waveform)
         time.sleep(0.05)
     if voltage is not None:
-        pump.bartels_set_voltage(voltage)
+        pump.set_voltage(voltage)
         time.sleep(0.05)
     if freq is not None:
-        pump.bartels_set_freq(freq)
+        pump.set_frequency(freq)
         time.sleep(0.05)
     if start:
-        pump.bartels_start()
+        pump.start()
 
 
 def run_sequence(
@@ -257,7 +257,7 @@ def run_sequence(
             # profile name for logging only (initial settings were applied at controller init).
             print(f"[ACTION] Pump START (profile '{profile_name}' - using initial configured settings)")
             try:
-                pump.bartels_start()
+                pump.start()
             except Exception as e:
                 print(f"[WARN] Failed to start pump: {e}")
             continue
@@ -267,7 +267,7 @@ def run_sequence(
                 sys.exit("Pump requested but not initialized.")
             print("[ACTION] Pump START")
             try:
-                pump.bartels_start()
+                pump.start()
             except Exception as e:
                 print(f"[WARN] Failed to start pump: {e}")
             continue
@@ -276,7 +276,7 @@ def run_sequence(
                 sys.exit("Pump requested but not initialized.")
             print("[ACTION] Pump STOP")
             try:
-                pump.bartels_stop()
+                pump.stop()
             except Exception as e:
                 print(f"[WARN] Failed to stop pump: {e}")
             continue
@@ -286,7 +286,7 @@ def run_sequence(
             val = step["pump_voltage"]
             print(f"[ACTION] Set pump voltage -> {val}")
             try:
-                pump.bartels_set_voltage(val)
+                pump.set_voltage(val)
             except Exception as e:
                 print(f"[WARN] Failed to set voltage: {e}")
             continue
@@ -296,7 +296,7 @@ def run_sequence(
             val = step["pump_freq"]
             print(f"[ACTION] Set pump frequency -> {val}")
             try:
-                pump.bartels_set_freq(val)
+                pump.set_frequency(val)
             except Exception as e:
                 print(f"[WARN] Failed to set frequency: {e}")
             continue
@@ -306,7 +306,7 @@ def run_sequence(
             val = step["pump_waveform"]
             print(f"[ACTION] Set pump waveform -> {val}")
             try:
-                pump.bartels_set_waveform(val)
+                pump.set_waveform(val)
             except Exception as e:
                 print(f"[WARN] Failed to set waveform: {e}")
             continue
@@ -316,9 +316,9 @@ def run_sequence(
             duration = float(step["pump_cycle"]) or 0.0
             print(f"[ACTION] Pump cycle for {duration}s")
             try:
-                pump.bartels_start()
+                pump.start()
                 time.sleep(duration)
-                pump.bartels_stop()
+                pump.stop()
             except Exception as e:
                 print(f"[WARN] Pump cycle error: {e}")
             continue
@@ -328,7 +328,7 @@ def run_sequence(
                 sys.exit("Pump requested but not initialized.")
             print("[ACTION] Pump OFF")
             try:
-                pump.bartels_stop()
+                pump.stop()
             except Exception as e:
                 print(f"[WARN] Could not stop pump cleanly: {e}")
             continue
@@ -423,6 +423,114 @@ def run_sequence(
             print(f"[WAIT] {wait_s}s")
             time.sleep(wait_s)
             continue
+        
+        # New: Standalone wait command
+        if "wait" in step:
+            wait_s = float(step["wait"]) or 0.0
+            print(f"[WAIT] {wait_s}s")
+            time.sleep(wait_s)
+            continue
+        
+        # New: Loop command with repeat count
+        if "loop" in step:
+            loop_data = step["loop"]
+            repeat = loop_data.get("repeat", 1)
+            steps = loop_data.get("steps", [])
+            wells = loop_data.get("wells")
+            
+            if wells:
+                # Wells generator mode (not yet implemented)
+                print(f"[LOOP] Wells generator mode not yet implemented: {wells}")
+                continue
+            
+            print(f"[LOOP] Repeating {len(steps)} steps {repeat} times")
+            for iteration in range(repeat):
+                print(f"  [LOOP ITERATION {iteration + 1}/{repeat}]")
+                for substep in steps:
+                    if not isinstance(substep, dict):
+                        continue
+                    
+                    # Handle valve_on with duration syntax: valve_on: 2
+                    if "valve_on" in substep:
+                        if not valve:
+                            sys.exit("Valve requested but not initialized.")
+                        duration = float(substep["valve_on"]) if isinstance(substep["valve_on"], (int, float)) else 0
+                        if duration > 0:
+                            print(f"    [VALVE] ON for {duration}s")
+                            valve.on()
+                            time.sleep(duration)
+                        else:
+                            print(f"    [VALVE] ON")
+                            valve.on()
+                        continue
+                    
+                    # Handle valve_off with duration syntax: valve_off: 0
+                    if "valve_off" in substep:
+                        if not valve:
+                            sys.exit("Valve requested but not initialized.")
+                        duration = float(substep["valve_off"]) if isinstance(substep["valve_off"], (int, float)) else 0
+                        print(f"    [VALVE] OFF")
+                        valve.off()
+                        if duration > 0:
+                            time.sleep(duration)
+                        continue
+                    
+                    # Handle wait in loop
+                    if "wait" in substep:
+                        wait_s = float(substep["wait"])
+                        print(f"    [WAIT] {wait_s}s")
+                        time.sleep(wait_s)
+                        continue
+                    
+                    # Handle pump commands in loop
+                    if "pump_on" in substep:
+                        if not pump:
+                            sys.exit("Pump requested but not initialized.")
+                        profile_name = substep["pump_on"]
+                        print(f"    [PUMP] START (profile '{profile_name}')")
+                        try:
+                            pump.start()
+                        except Exception as e:
+                            print(f"      [WARN] Failed to start pump: {e}")
+                        continue
+                    
+                    if "pump_off" in substep:
+                        if not pump:
+                            sys.exit("Pump requested but not initialized.")
+                        print(f"    [PUMP] STOP")
+                        try:
+                            pump.stop()
+                        except Exception as e:
+                            print(f"      [WARN] Failed to stop pump: {e}")
+                        continue
+                    
+                    # Handle move command (placeholder for future stage3d integration)
+                    if "move" in substep:
+                        position = substep["move"]
+                        print(f"    [MOVE] to position '{position}' (stage3d not yet implemented)")
+                        continue
+                    
+                    # Handle image command (placeholder for future microscope integration)
+                    if "image" in substep:
+                        image_id = substep["image"]
+                        print(f"    [IMAGE] capture {image_id} (microscope not yet implemented)")
+                        continue
+            
+            print(f"[LOOP] Completed")
+            continue
+        
+        # New: Move command (placeholder for future stage3d integration)
+        if "move" in step:
+            position = step["move"]
+            print(f"[MOVE] to position '{position}' (stage3d not yet implemented)")
+            continue
+        
+        # New: Image command (placeholder for future microscope integration)
+        if "image" in step:
+            image_id = step["image"]
+            print(f"[IMAGE] capture {image_id} (microscope not yet implemented)")
+            continue
+        
         print(f"[WARN] Unrecognized step keys: {list(step.keys())}")
 
 
@@ -478,10 +586,16 @@ def main(argv: list[str] | None = None) -> int:
         if dry_run:
             valve = MockValve()
         else:
-            valve = ValveController(port="COM5", baudrate=115200)
+            # Try to get valve port from environment, default to COM6 (Arduino typical)
+            valve_port = os.getenv("VALVE_PORT", "COM6")
+            valve_baud = int(os.getenv("VALVE_BAUDRATE", "115200"))
+            print(f"[INFO] Attempting valve connection on {valve_port}")
+            valve = ValveController(port=valve_port, baudrate=valve_baud)
             if getattr(valve, 'ser', None) is None:
-                print(f"Valve initialization failed: Serial connection not established.")
+                print(f"Valve initialization failed: Serial connection not established on {valve_port}")
+                print(f"Suggested fix: Check Arduino connection or set VALVE_PORT environment variable")
                 return 1
+            print(f"[INFO] Valve initialized successfully on {valve_port}")
 
     try:
         run_sequence(config, pump, valve, pump_profiles, dry_run=dry_run)
@@ -489,7 +603,7 @@ def main(argv: list[str] | None = None) -> int:
         print("\n[INTERRUPT] Caught Ctrl+C - shutting down devices...")
         try:
             if pump:
-                pump.bartels_stop()
+                pump.stop()
         except Exception:
             pass
         try:
