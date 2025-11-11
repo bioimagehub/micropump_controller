@@ -35,7 +35,7 @@ class FSKConfig:
     space_freq: int = 1800     # Binary 1
     bit_duration: float = 0.1  # 100ms per bit (10 baud - very slow but robust)
     preamble_duration: float = 0.5  # 500ms sync tone
-    preamble_freq: int = 2400  # Distinctive frequency for message start
+    preamble_freq: int = 1500  # Distinctive frequency for message start (was 2400 - adjusted for cable transmission)
     
     # Detection thresholds - LOWERED for over-air transmission
     min_tone_duration: float = 0.05  # Reject tones shorter than 50ms (was 80ms)
