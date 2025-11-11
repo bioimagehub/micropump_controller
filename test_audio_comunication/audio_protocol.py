@@ -37,10 +37,10 @@ class FSKConfig:
     preamble_duration: float = 0.5  # 500ms sync tone
     preamble_freq: int = 2400  # Distinctive frequency for message start
     
-    # Detection thresholds
-    min_tone_duration: float = 0.08  # Reject tones shorter than 80ms (filters speech)
-    frequency_tolerance: float = 100  # Hz tolerance for frequency detection
-    min_signal_power: float = 0.01   # Minimum RMS to consider valid signal
+    # Detection thresholds - LOWERED for over-air transmission
+    min_tone_duration: float = 0.05  # Reject tones shorter than 50ms (was 80ms)
+    frequency_tolerance: float = 150  # Hz tolerance for frequency detection (was 100)
+    min_signal_power: float = 0.005   # Minimum RMS to consider valid signal (was 0.01)
 
 
 class AudioModem:
@@ -69,6 +69,9 @@ class AudioModem:
             envelope[:ramp_samples] = np.linspace(0, 1, ramp_samples)
             envelope[-ramp_samples:] = np.linspace(1, 0, ramp_samples)
             tone *= envelope
+        
+        # Increase volume for over-air transmission (0.8 = 80% max volume)
+        tone *= 0.8
             
         return tone
     
@@ -126,21 +129,37 @@ class AudioModem:
         
         Returns (frequency, power_level)
         """
+        # Apply high-pass filter to remove low-frequency rumble/bass
+        # This filters out frequencies below 800 Hz (our lowest tone is 1200 Hz)
+        from scipy import signal
+        try:
+            # Design high-pass filter (800 Hz cutoff)
+            sos = signal.butter(4, 800, 'hp', fs=self.config.sample_rate, output='sos')
+            filtered = signal.sosfilt(sos, audio_chunk)
+        except:
+            # Fallback if scipy not available - use simple high-pass
+            filtered = audio_chunk
+        
         # Apply window to reduce spectral leakage
-        window = np.hanning(len(audio_chunk))
-        windowed = audio_chunk * window
+        window = np.hanning(len(filtered))
+        windowed = filtered * window
         
         # FFT
         fft = np.fft.rfft(windowed)
-        freqs = np.fft.rfftfreq(len(audio_chunk), 1 / self.config.sample_rate)
+        freqs = np.fft.rfftfreq(len(filtered), 1 / self.config.sample_rate)
+        
+        # Only look at frequencies above 800 Hz (ignore bass/rumble)
+        valid_idx = freqs > 800
+        magnitude = np.abs(fft)
+        magnitude_filtered = magnitude.copy()
+        magnitude_filtered[~valid_idx] = 0
         
         # Find peak
-        magnitude = np.abs(fft)
-        peak_idx = np.argmax(magnitude)
+        peak_idx = np.argmax(magnitude_filtered)
         peak_freq = freqs[peak_idx]
         
         # Calculate signal power (RMS)
-        power = np.sqrt(np.mean(audio_chunk ** 2))
+        power = np.sqrt(np.mean(filtered ** 2))
         
         return peak_freq, power
     
@@ -148,9 +167,13 @@ class AudioModem:
         """Check if detected frequency matches target within tolerance"""
         return abs(detected - target) < self.config.frequency_tolerance
     
-    def decode_command(self, audio: np.ndarray) -> Optional[Command]:
+    def decode_command(self, audio: np.ndarray, debug: bool = False) -> Optional[Command]:
         """
         Decode FSK audio signal into command.
+        
+        Args:
+            audio: Audio signal to decode
+            debug: If True, print debug information
         
         Returns Command if valid message detected, None otherwise.
         """
@@ -161,42 +184,68 @@ class AudioModem:
         preamble_found = False
         preamble_end_idx = 0
         
+        if debug:
+            print(f"    [DEBUG] Scanning for preamble (2400 Hz)...")
+        
         for i in range(0, len(audio) - chunk_size, chunk_size // 4):
             chunk = audio[i:i + chunk_size]
             freq, power = self._detect_frequency(chunk)
+            
+            if debug and power > self.config.min_signal_power / 2:
+                print(f"    [DEBUG] pos={i/self.config.sample_rate:.2f}s: freq={freq:.0f}Hz, power={power:.4f}")
             
             if (self._is_frequency_match(freq, self.config.preamble_freq) and 
                 power > self.config.min_signal_power):
                 preamble_found = True
                 preamble_end_idx = i + chunk_size
+                if debug:
+                    print(f"    [DEBUG] ✓ Preamble found at {i/self.config.sample_rate:.2f}s!")
                 break
         
         if not preamble_found:
+            if debug:
+                print(f"    [DEBUG] ✗ No preamble found")
             return None
         
         # Decode command bits (4 bits)
         bit_chunk_size = int(self.config.bit_duration * self.config.sample_rate)
         command_bits = []
         
+        if debug:
+            print(f"    [DEBUG] Decoding command bits...")
+        
         for i in range(4):
             start = preamble_end_idx + i * bit_chunk_size
             end = start + bit_chunk_size
             
             if end > len(audio):
+                if debug:
+                    print(f"    [DEBUG] ✗ Incomplete transmission")
                 return None  # Incomplete transmission
             
             chunk = audio[start:end]
             freq, power = self._detect_frequency(chunk)
             
+            if debug:
+                print(f"    [DEBUG] bit {i}: freq={freq:.0f}Hz, power={power:.4f}", end='')
+            
             if power < self.config.min_signal_power:
+                if debug:
+                    print(f" ✗ weak signal")
                 return None  # Weak signal
             
             # Decode bit
             if self._is_frequency_match(freq, self.config.mark_freq):
                 command_bits.append(0)
+                if debug:
+                    print(f" → 0 (mark)")
             elif self._is_frequency_match(freq, self.config.space_freq):
                 command_bits.append(1)
+                if debug:
+                    print(f" → 1 (space)")
             else:
+                if debug:
+                    print(f" ✗ invalid freq")
                 return None  # Frequency doesn't match either mark or space
         
         # Decode checksum bits (4 bits)
@@ -245,16 +294,39 @@ class MicroscopeAudioController:
     Uses AudioModem for robust FSK communication.
     """
     
-    def __init__(self):
+    def __init__(self, input_device: Optional[int] = None, output_device: Optional[int] = None):
+        """
+        Initialize audio controller.
+        
+        Args:
+            input_device: Optional device ID for microphone (if None, uses system default)
+            output_device: Optional device ID for speakers (if None, uses system default)
+        """
         self.modem = AudioModem()
         self.is_initialized = False
         self.last_error = ""
+        self.input_device = input_device
+        self.output_device = output_device
         
         # Try importing sounddevice
         try:
             import sounddevice as sd
             self.sd = sd
             self.is_initialized = True
+            
+            # Auto-detect devices if not specified and no default exists
+            if self.input_device is None:
+                try:
+                    sd.query_devices(kind='input')
+                except Exception:
+                    # No default input - try to find first available
+                    devices = sd.query_devices()
+                    for i, device in enumerate(devices):
+                        if device['max_input_channels'] > 0:
+                            self.input_device = i
+                            print(f"Auto-selected input device {i}: {device['name']}")
+                            break
+                            
         except ImportError:
             self.last_error = "sounddevice not installed: pip install sounddevice numpy"
     
@@ -276,7 +348,7 @@ class MicroscopeAudioController:
             try:
                 # Encode and play
                 audio = self.modem.encode_command(command)
-                self.sd.play(audio, self.modem.config.sample_rate)
+                self.sd.play(audio, self.modem.config.sample_rate, device=self.output_device)
                 self.sd.wait()
                 
                 print(f"  Sent {command.name} (attempt {attempt + 1}/{retries})")
@@ -310,34 +382,53 @@ class MicroscopeAudioController:
             sample_rate = self.modem.config.sample_rate
             
             start_time = time.time()
+            chunk_num = 0
             
             while time.time() - start_time < timeout:
                 remaining = int(timeout - (time.time() - start_time))
-                print(f"  Listening... ({remaining}s remaining)")
+                chunk_num += 1
+                print(f"  Listening... ({remaining}s remaining, chunk #{chunk_num})")
                 
                 recording = self.sd.rec(
                     int(duration * sample_rate),
                     samplerate=sample_rate,
-                    channels=1
+                    channels=1,
+                    device=self.input_device
                 )
                 self.sd.wait()
                 
-                # Try to decode
-                command = self.modem.decode_command(recording[:, 0])
+                # Analyze audio levels for debugging
+                audio_data = recording[:, 0]
+                max_amp = np.max(np.abs(audio_data))
+                rms = np.sqrt(np.mean(audio_data ** 2))
+                
+                # Debug: show when we detect sound
+                if max_amp > 0.01:
+                    print(f"  🔊 SOUND DETECTED! max={max_amp:.4f}, rms={rms:.4f}")
+                elif max_amp > 0.001:
+                    print(f"  ~ weak audio: max={max_amp:.4f}, rms={rms:.4f}")
+                else:
+                    print(f"  - silence: max={max_amp:.4f}")
+                
+                # Try to decode with debug output if sound detected
+                debug_mode = max_amp > 0.005  # Enable debug if any significant sound
+                command = self.modem.decode_command(recording[:, 0], debug=debug_mode)
                 
                 if command:
-                    print(f"  Received: {command.name}")
+                    print(f"  ✓ DECODED: {command.name}")
                     
                     if expected is None or command == expected:
                         return command
                     else:
-                        print(f"  Expected {expected.name}, got {command.name} - ignoring")
+                        print(f"  ⚠ Expected {expected.name}, got {command.name} - ignoring")
             
-            print("  Timeout - no valid command received")
+            print("  ⏱ Timeout - no valid command received")
             return None
             
         except Exception as e:
-            print(f"  Listen error: {e}")
+            print(f"  ✗ Listen error: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def trigger_and_wait(self, timeout: float = 60.0) -> bool:
