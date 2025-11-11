@@ -12,6 +12,7 @@ dependencies = [
     "pyusb>=1.2.0",
     "sounddevice>=0.4.0",
     "scipy>=1.11.0",
+    "pyautogui>=0.9.54",
 ]
 
 [project.optional-dependencies]

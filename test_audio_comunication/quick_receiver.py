@@ -4,6 +4,7 @@ QUICK RECEIVER - Listens for 1000 Hz, responds with 1200 Hz
 import sounddevice as sd
 import numpy as np
 import time
+from audio_config import load_audio_config, save_audio_config
 
 sample_rate = 44100
 listen_freq = 1000
@@ -12,6 +13,17 @@ respond_freq = 1200
 print("=" * 60)
 print("QUICK RECEIVER - Listening for 1000 Hz")
 print("=" * 60)
+
+# Try to load saved config first
+config = load_audio_config()
+saved_input = config.get('input_device')
+
+if saved_input is not None:
+    print(f"\n✓ Found saved input device: {saved_input}")
+    print("   Testing saved device first...\n")
+else:
+    print("\n⚠ No saved device config found")
+    print("   Will scan all devices...\n")
 
 # Show input devices
 devices = sd.query_devices()
@@ -68,19 +80,38 @@ def test_device(device_id: int) -> bool:
 
 
 # Try each input device
-for i, device in enumerate(devices):
-    if device['max_input_channels'] > 0:
-        if test_device(i):
-            print(f"\n✓ FOUND IT! Device {i} hears {listen_freq} Hz!")
-            print(f"\n🔊 Responding with {respond_freq} Hz for {response_duration}s...")
-            sd.play(response_tone, sample_rate)
-            sd.wait()
-            print("✓ Response sent!")
-            
-            print("\n" + "=" * 60)
-            print("SUCCESS! Communication established!")
-            print("=" * 60)
-            break
+working_device = None
+
+# If we have a saved device, try it first
+if saved_input is not None:
+    print(f"Testing saved device {saved_input}...")
+    if test_device(saved_input):
+        working_device = saved_input
+        print(f"✓ Saved device {saved_input} still works!")
+
+# If saved device didn't work, scan all devices
+if working_device is None:
+    print("\nScanning all devices...")
+    for i, device in enumerate(devices):
+        if device['max_input_channels'] > 0:
+            if test_device(i):
+                working_device = i
+                print(f"\n✓ FOUND IT! Device {i} hears {listen_freq} Hz!")
+                
+                # Save this working device for next time
+                save_audio_config(input_device=i)
+                break
+
+# If we found a working device, respond
+if working_device is not None:
+    print(f"\n🔊 Responding with {respond_freq} Hz for {response_duration}s...")
+    sd.play(response_tone, sample_rate)
+    sd.wait()
+    print("✓ Response sent!")
+    
+    print("\n" + "=" * 60)
+    print("SUCCESS! Communication established!")
+    print("=" * 60)
 else:
     print("\n✗ No device detected 1000 Hz")
     print("   Make sure sender is playing and audio cable is connected")
