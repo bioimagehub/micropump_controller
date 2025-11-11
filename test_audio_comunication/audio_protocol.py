@@ -185,7 +185,7 @@ class AudioModem:
         preamble_end_idx = 0
         
         if debug:
-            print(f"    [DEBUG] Scanning for preamble (2400 Hz)...")
+            print(f"    [DEBUG] Scanning for preamble ({self.config.preamble_freq} Hz)...")
         
         for i in range(0, len(audio) - chunk_size, chunk_size // 4):
             chunk = audio[i:i + chunk_size]
