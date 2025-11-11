@@ -11,18 +11,26 @@
 ######################################################################
 
 pump settings:
-  quick test:
+  full flow:
     waveform: RECT
     voltage: 100   # Vpp
     freq: 100       # Hz
 
 required hardware:
-  pump: false
-  valve: false
+  pump: true
+  valve: true
   pipetting robot: false
   microscope: false
 
 run:
-  - pump_on: quick test
-  - duration: 10    # Keep pump running for 10 seconds
+  # wash tube A 
+  - pump_on: full flow
+  - duration: 60    # Keep pump running for 10 seconds
+
+  # wash tube B
+  - valve_toggle: 0 # turn on valve to tube B
+  - duration: 60    # Keep pump running for 10 seconds
+  - valve_toggle: 0 # turn off valve - back to tube A
+  
+  # stop pump
   - pump_off: 0     # Value ignored; serves as an action trigger

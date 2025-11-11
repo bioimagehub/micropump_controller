@@ -78,6 +78,7 @@ import argparse
 import os
 import sys
 import time
+import signal
 from typing import Any, Dict, List
 
 import yaml
@@ -178,6 +179,46 @@ def load_env_once():
         load_dotenv(env_path)  # ignore return
 
 
+# Global flag used to indicate a user-requested stop (Ctrl+C)
+STOP_REQUESTED = False
+
+
+def _handle_sigint(signum, frame) -> None:
+    """Signal handler for SIGINT (Ctrl+C). Set STOP_REQUESTED so loops can exit cleanly."""
+    global STOP_REQUESTED
+    if not STOP_REQUESTED:
+        print("\n[INTERRUPT] SIGINT received - requesting shutdown...")
+    STOP_REQUESTED = True
+
+
+def _setup_signal_handlers() -> None:
+    """Register signal handler(s) for graceful shutdown on Ctrl+C."""
+    try:
+        signal.signal(signal.SIGINT, _handle_sigint)
+    except Exception:
+        # Some environments may not support signals in the same way; ignore if registration fails
+        pass
+
+
+def interruptible_sleep(total: float, tick: float = 0.1) -> None:
+    """Sleep in small increments and abort early if STOP_REQUESTED is set.
+
+    Raises KeyboardInterrupt if a stop was requested so callers can handle it like a true
+    interrupt.
+    """
+    global STOP_REQUESTED
+    end = time.time() + float(total or 0)
+    while time.time() < end:
+        if STOP_REQUESTED:
+            # Convert to KeyboardInterrupt so existing handlers work as expected
+            raise KeyboardInterrupt()
+        remaining = end - time.time()
+        time.sleep(min(tick, max(0.0, remaining)))
+    # final check
+    if STOP_REQUESTED:
+        raise KeyboardInterrupt()
+
+
 def resolve_ports_from_env(prefer_detection: bool = True) -> dict:
     """Determine ports using layered strategy:
     1. Explicit env overrides (PUMP_PORT / VALVE_SERIAL_PORT)
@@ -223,13 +264,13 @@ def apply_pump_profile(pump, name: str, profiles: Dict[str, Any], *, start: bool
     freq = profile.get("freq")
     if waveform is not None:
         pump.set_waveform(waveform)
-        time.sleep(0.05)
+        interruptible_sleep(0.05)
     if voltage is not None:
         pump.set_voltage(voltage)
-        time.sleep(0.05)
+        interruptible_sleep(0.05)
     if freq is not None:
         pump.set_frequency(freq)
-        time.sleep(0.05)
+        interruptible_sleep(0.05)
     if start:
         pump.start()
 
@@ -317,7 +358,7 @@ def run_sequence(
             print(f"[ACTION] Pump cycle for {duration}s")
             try:
                 pump.start()
-                time.sleep(duration)
+                interruptible_sleep(duration)
                 pump.stop()
             except Exception as e:
                 print(f"[WARN] Pump cycle error: {e}")
@@ -406,13 +447,13 @@ def run_sequence(
                             sys.exit("Valve requested but not initialized.")
                         valve.on()
                         print(f"      [VALVE] ON command sent.")
-                        time.sleep(segment)
+                        interruptible_sleep(segment)
                     elif action == "valve_off":
                         if not valve:
                             sys.exit("Valve requested but not initialized.")
                         valve.off()
                         print(f"      [VALVE] OFF command sent.")
-                        time.sleep(segment)
+                        interruptible_sleep(segment)
                     else:
                         print(f"      [WARN] Unknown action '{action}' in block")
             print(f"[BLOCK] Completed after {time.time() - block_start:.1f}s.")
@@ -421,14 +462,14 @@ def run_sequence(
         if list(step.keys()) == ["duration"]:
             wait_s = float(step["duration"]) or 0.0
             print(f"[WAIT] {wait_s}s")
-            time.sleep(wait_s)
+            interruptible_sleep(wait_s)
             continue
         
         # New: Standalone wait command
         if "wait" in step:
             wait_s = float(step["wait"]) or 0.0
             print(f"[WAIT] {wait_s}s")
-            time.sleep(wait_s)
+            interruptible_sleep(wait_s)
             continue
         
         # New: Loop command with repeat count
@@ -458,7 +499,7 @@ def run_sequence(
                         if duration > 0:
                             print(f"    [VALVE] ON for {duration}s")
                             valve.on()
-                            time.sleep(duration)
+                            interruptible_sleep(duration)
                         else:
                             print(f"    [VALVE] ON")
                             valve.on()
@@ -472,7 +513,7 @@ def run_sequence(
                         print(f"    [VALVE] OFF")
                         valve.off()
                         if duration > 0:
-                            time.sleep(duration)
+                            interruptible_sleep(duration)
                         continue
                     
                     # Handle wait in loop
@@ -548,6 +589,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_arg_parser()
     args = parser.parse_args(argv)
+
+    # Ensure signal handlers are active so Ctrl+C can be handled gracefully
+    global STOP_REQUESTED
+    STOP_REQUESTED = False
+    _setup_signal_handlers()
 
     config = load_yaml_config(args.yaml_file)
     required_hw = config.get("required hardware", {})

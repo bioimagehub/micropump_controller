@@ -22,11 +22,11 @@ required hardware:
 run:
   # Pulse the valve 5 times with 2 second on, 1 second off
   - loop:
-      repeat: 5
+      repeat: 50
       steps:
-        - valve_on: 2
+        - valve_on: 20
         - valve_off: 0
-        - wait: 1
+        - wait: 20
 
   # Final wait to observe last pulse
   - wait: 2
