@@ -13,12 +13,14 @@ dependencies = [
     "sounddevice>=0.4.0",
     "scipy>=1.11.0",
     "pyautogui>=0.9.54",
+    "pyinstaller>=6.16.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.0.0",
     "pytest-cov>=4.0.0",
+    "pyinstaller>=6.0.0",
 ]
 
 [build-system]

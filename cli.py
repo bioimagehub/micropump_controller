@@ -281,6 +281,7 @@ def run_sequence(
     valve,
     pump_profiles: Dict[str, Any],
     *,
+    microscope=None,
     dry_run: bool = False,
 ):
     for idx, step in enumerate(config.get("run", [])):
@@ -293,10 +294,44 @@ def run_sequence(
             if not pump:
                 sys.exit("Pump requested but not initialized.")
             profile_name = step["pump_on"]
-            # Modified behavior: mimic test_pump_cycle.py where we simply start the pump
-            # without re-applying waveform/voltage/frequency each time. We keep the
-            # profile name for logging only (initial settings were applied at controller init).
-            print(f"[ACTION] Pump START (profile '{profile_name}' - using initial configured settings)")
+            
+            # Apply profile settings
+            if profile_name not in pump_profiles:
+                print(f"[WARN] Profile '{profile_name}' not found in pump settings")
+                continue
+            
+            profile = pump_profiles[profile_name]
+            print(f"[ACTION] Applying profile '{profile_name}': {profile}")
+            
+            # Apply waveform
+            if "waveform" in profile:
+                waveform = profile["waveform"]
+                try:
+                    pump.set_waveform(waveform)
+                    print(f"  ✓ Waveform: {waveform}")
+                except Exception as e:
+                    print(f"  [WARN] Failed to set waveform: {e}")
+            
+            # Apply voltage
+            if "voltage" in profile:
+                voltage = profile["voltage"]
+                try:
+                    pump.set_voltage(voltage)
+                    print(f"  ✓ Voltage: {voltage} Vpp")
+                except Exception as e:
+                    print(f"  [WARN] Failed to set voltage: {e}")
+            
+            # Apply frequency
+            if "freq" in profile:
+                freq = profile["freq"]
+                try:
+                    pump.set_frequency(freq)
+                    print(f"  ✓ Frequency: {freq} Hz")
+                except Exception as e:
+                    print(f"  [WARN] Failed to set frequency: {e}")
+            
+            # Start the pump
+            print(f"[ACTION] Pump START")
             try:
                 pump.start()
             except Exception as e:
@@ -556,6 +591,15 @@ def run_sequence(
                         image_id = substep["image"]
                         print(f"    [IMAGE] capture {image_id} (microscope not yet implemented)")
                         continue
+                    
+                    # Handle microscope acquire command
+                    if "microscope_acquire" in substep:
+                        if not microscope:
+                            print("    [WARN] Microscope requested but not initialized")
+                            continue
+                        print(f"    [MICROSCOPE] Triggering image acquisition...")
+                        microscope.acquire()
+                        continue
             
             print(f"[LOOP] Completed")
             continue
@@ -570,6 +614,15 @@ def run_sequence(
         if "image" in step:
             image_id = step["image"]
             print(f"[IMAGE] capture {image_id} (microscope not yet implemented)")
+            continue
+        
+        # New: Microscope acquire command
+        if "microscope_acquire" in step:
+            if not microscope:
+                print("[WARN] Microscope requested but not initialized")
+                continue
+            print(f"[MICROSCOPE] Triggering image acquisition...")
+            microscope.acquire()
             continue
         
         print(f"[WARN] Unrecognized step keys: {list(step.keys())}")
@@ -603,6 +656,7 @@ def main(argv: list[str] | None = None) -> int:
 
     pump_enabled = bool(required_hw.get("pump", False))
     valve_enabled = bool(required_hw.get("valve", False))
+    microscope_enabled = bool(required_hw.get("microscope", False))
     dry_run = args.dry_run
 
     pump_profiles = config.get("pump settings", {}) if pump_enabled else {}
@@ -643,8 +697,18 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             print(f"[INFO] Valve initialized successfully on {valve_port}")
 
+    microscope = None
+    if microscope_enabled:
+        from src.microscope import Microscope
+        microscope = Microscope()
+        if not microscope.is_initialized:
+            print(f"Microscope initialization failed: {microscope.last_error}")
+            print("Suggested fix: Check audio output device configuration")
+            return 1
+        print(f"[INFO] Microscope controller initialized (audio device {microscope.output_device})")
+
     try:
-        run_sequence(config, pump, valve, pump_profiles, dry_run=dry_run)
+        run_sequence(config, pump, valve, pump_profiles, microscope=microscope, dry_run=dry_run)
     except KeyboardInterrupt:
         print("\n[INTERRUPT] Caught Ctrl+C - shutting down devices...")
         try:
