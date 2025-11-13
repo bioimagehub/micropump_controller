@@ -598,7 +598,11 @@ def run_sequence(
                             print("    [WARN] Microscope requested but not initialized")
                             continue
                         print(f"    [MICROSCOPE] Triggering image acquisition...")
-                        microscope.acquire()
+                        success = microscope.acquire()
+                        if success:
+                            print(f"    [MICROSCOPE] ✓ Acquisition completed successfully")
+                        else:
+                            print(f"    [MICROSCOPE] ✗ Acquisition failed or timed out")
                         continue
             
             print(f"[LOOP] Completed")
@@ -622,7 +626,11 @@ def run_sequence(
                 print("[WARN] Microscope requested but not initialized")
                 continue
             print(f"[MICROSCOPE] Triggering image acquisition...")
-            microscope.acquire()
+            success = microscope.acquire()
+            if success:
+                print(f"[MICROSCOPE] ✓ Acquisition completed successfully")
+            else:
+                print(f"[MICROSCOPE] ✗ Acquisition failed or timed out")
             continue
         
         print(f"[WARN] Unrecognized step keys: {list(step.keys())}")

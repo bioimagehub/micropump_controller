@@ -19,7 +19,8 @@ This folder contains YAML configuration files for automating micropump, valve, s
 - `pump_on: <profile>`: Start pump using a named profile from `pump settings`
 - `pump_off: 0`: Stop pump
 - `wait: <seconds>`: Wait/pause for specified seconds
-- `image: 1`: Trigger microscope imaging
+- `image: 1`: Trigger microscope imaging (legacy - use microscope_acquire instead)
+- `microscope_acquire: true`: **NEW** Bidirectional microscope control - sends CAPTURE, waits for DONE
 - `valve_on: <seconds>`: Open valve for specified seconds
 - `valve_off: 0`: Close valve
 - `loop`: Repeat a block of steps (see below)

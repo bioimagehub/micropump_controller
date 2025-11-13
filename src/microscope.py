@@ -1,8 +1,8 @@
 """
 Microscope control via audio communication
 
-Sends 1000 Hz trigger signal to airgapped microscope PC.
-The microscope_listener.py running on the microscope PC will click the Run button.
+Uses FSK audio modem for bidirectional communication with airgapped microscope PC.
+Sends CAPTURE command and waits for DONE response.
 """
 
 import sounddevice as sd
@@ -16,37 +16,35 @@ import logging
 import sys
 sys.path.insert(0, str(Path(__file__).parent.parent / "test_audio_comunication"))
 from audio_config import load_audio_config, save_audio_config
+from audio_protocol import AudioModem, Command, FSKConfig
 
 
 class Microscope:
     """
-    Simple microscope controller that triggers image acquisition via audio signal.
+    Bidirectional microscope controller using FSK audio modem.
     
-    Sends 1000 Hz tone to trigger microscope_listener.py on the airgapped microscope PC.
+    Sends CAPTURE command to trigger acquisition, waits for DONE response.
     """
     
-    TRIGGER_FREQ = 1000  # Hz - frequency to send
-    TRIGGER_DURATION = 2.0  # seconds - how long to send signal
-    SAMPLE_RATE = 44100
-    
-    def __init__(self, output_device: Optional[int] = None):
+    def __init__(self, output_device: Optional[int] = None, input_device: Optional[int] = None):
         """
         Initialize microscope controller.
         
         Args:
             output_device: Audio output device ID. If None, uses saved or default device.
+            input_device: Audio input device ID. If None, uses saved or default device.
         """
         self.is_initialized = False
         self.last_error = ""
         self.output_device = output_device
+        self.input_device = input_device
         
-        # Load saved output device if not specified
+        # Load saved devices if not specified
+        config = load_audio_config()
+        
         if self.output_device is None:
-            config = load_audio_config()
             self.output_device = config.get('output_device')
-            
             if self.output_device is None:
-                # Use default output device
                 try:
                     self.output_device = sd.default.device[1]
                     save_audio_config(output_device=self.output_device)
@@ -55,46 +53,129 @@ class Microscope:
                     logging.error(self.last_error)
                     return
         
-        # Generate trigger tone (1000 Hz)
-        t = np.linspace(0, self.TRIGGER_DURATION, int(self.SAMPLE_RATE * self.TRIGGER_DURATION))
-        self.trigger_tone = 0.5 * np.sin(2 * np.pi * self.TRIGGER_FREQ * t)
+        if self.input_device is None:
+            self.input_device = config.get('input_device')
+            if self.input_device is None:
+                try:
+                    self.input_device = sd.default.device[0]
+                    save_audio_config(input_device=self.input_device)
+                except Exception as e:
+                    self.last_error = f"Failed to get default input device: {e}"
+                    logging.error(self.last_error)
+                    return
+        
+        # Initialize FSK modem
+        self.modem = AudioModem(FSKConfig())
         
         self.is_initialized = True
-        logging.info(f"Microscope controller initialized (audio device {self.output_device})")
+        logging.info(f"Microscope controller initialized (output: {self.output_device}, input: {self.input_device})")
     
-    def acquire(self) -> bool:
+    def acquire(self, timeout: float = 300.0) -> bool:
         """
-        Trigger image acquisition on microscope.
+        Trigger image acquisition on microscope and wait for completion.
         
-        Sends 1000 Hz audio signal that microscope_listener.py will detect
-        and respond to by clicking the Run button.
+        Sends CAPTURE command via audio, waits for DONE response from microscope.
+        
+        Args:
+            timeout: Maximum time to wait for acquisition completion (default: 5 minutes)
         
         Returns:
-            True if signal sent successfully, False otherwise
+            True if acquisition completed successfully, False on timeout or error
         """
         if not self.is_initialized:
             print(f"✗ Microscope not initialized: {self.last_error}")
             return False
         
         try:
-            print(f"🔊 Sending microscope trigger ({self.TRIGGER_FREQ} Hz for {self.TRIGGER_DURATION}s)...")
+            print("� Triggering microscope acquisition...")
             
-            # Play trigger tone
-            sd.play(self.trigger_tone, self.SAMPLE_RATE, device=self.output_device)
+            # Send CAPTURE command
+            audio = self.modem.encode_command(Command.CAPTURE)
+            sd.play(audio, self.modem.config.sample_rate, device=self.output_device)
             sd.wait()
             
-            print("✓ Microscope trigger sent")
-            logging.info("Microscope trigger sent successfully")
-            return True
+            print("✓ CAPTURE command sent")
+            logging.info("CAPTURE command sent to microscope")
+            
+            # Wait for DONE response
+            print(f"⏳ Waiting for acquisition to complete (timeout: {timeout}s)...")
+            done_received = self._wait_for_done(timeout)
+            
+            if done_received:
+                print("✓ Microscope acquisition complete!")
+                logging.info("Received DONE signal from microscope")
+                return True
+            else:
+                print("✗ Timeout waiting for microscope completion")
+                logging.warning(f"No DONE signal received within {timeout}s")
+                return False
             
         except Exception as e:
-            self.last_error = f"Failed to send trigger: {e}"
+            self.last_error = f"Acquisition failed: {e}"
             print(f"✗ {self.last_error}")
             logging.error(self.last_error)
             return False
     
+    def _wait_for_done(self, timeout: float) -> bool:
+        """
+        Listen for DONE command from microscope.
+        
+        Args:
+            timeout: Maximum time to wait in seconds
+        
+        Returns:
+            True if DONE received, False on timeout
+        """
+        sample_rate = self.modem.config.sample_rate
+        start_time = time.time()
+        chunk_duration = 5.0  # Record in 5-second chunks
+        chunk_num = 0
+        
+        while time.time() - start_time < timeout:
+            elapsed = time.time() - start_time
+            remaining = int(timeout - elapsed)
+            chunk_num += 1
+            
+            print(f"  Listening for DONE... ({remaining}s remaining, chunk #{chunk_num})")
+            
+            # Record audio chunk
+            recording = sd.rec(
+                int(chunk_duration * sample_rate),
+                samplerate=sample_rate,
+                channels=1,
+                device=self.input_device,
+                dtype='float32'
+            )
+            sd.wait()
+            
+            # Check audio levels for debugging
+            audio_data = recording[:, 0]
+            max_amp = np.max(np.abs(audio_data))
+            rms = np.sqrt(np.mean(audio_data ** 2))
+            
+            if max_amp > 0.01:
+                print(f"    🔊 Sound detected! max={max_amp:.4f}, rms={rms:.4f}")
+                debug_mode = True
+            elif max_amp > 0.001:
+                print(f"    ~ Weak audio: max={max_amp:.4f}, rms={rms:.4f}")
+                debug_mode = False
+            else:
+                print(f"    - Silence: max={max_amp:.4f}")
+                debug_mode = False
+            
+            # Try to decode
+            command = self.modem.decode_command(audio_data, debug=debug_mode)
+            
+            if command == Command.DONE:
+                print("    ✓ DONE command received!")
+                return True
+            elif command is not None:
+                print(f"    ⚠ Unexpected command: {command.name} (expecting DONE)")
+        
+        return False
+    
     def close(self) -> None:
-        """Cleanup (nothing to do for audio-based controller)"""
+        """Cleanup resources"""
         logging.info("Microscope controller closed")
 
 
